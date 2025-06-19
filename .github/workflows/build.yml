@@ -4,22 +4,21 @@ on:
   push:
   pull_request:
 
+
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up JDK 8          
+      - name: Set up JDK 17          # ①  install a modern LTS JDK
         id: jdk
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '8'
+          java-version: '17'         #   (≥16 satisfies pack200)
 
-      - name: Build with Gradle     
+      - name: Build with Gradle      # ②  force Gradle to use it
         env:
           JAVA_HOME: ${{ steps.jdk.outputs.java-home }}
         run: ./gradlew setupDecompWorkspace build
@@ -29,3 +28,4 @@ jobs:
         with:
           name: mod-jar
           path: build/libs/*.jar
+
