@@ -21,7 +21,7 @@ jobs:
       - name: Build with Gradle      # ②  force Gradle to use it
         env:
           JAVA_HOME: ${{ steps.jdk.outputs.java-home }}
-        run: ./gradlew setupDecompWorkspace build
+        run: ./gradlew build
 
       - name: Upload mod JAR
         uses: actions/upload-artifact@v4
