@@ -4,62 +4,77 @@ import com.github.mkram17.bazaarutils.BazaarUtils;
 import com.github.mkram17.bazaarutils.config.BUConfig;
 import com.github.mkram17.bazaarutils.events.BUListener;
 import com.github.mkram17.bazaarutils.utils.Util;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
+import net.minecraft.client.Minecraft;
+import net.minecraft.util.ChatComponentText;
+import net.minecraft.util.EnumChatFormatting;
 
-public class JoinMessages implements BUListener {
-    private static final Text welcomeMessage = Text.literal("[Bazaar utils] ")
-            .formatted(Formatting.WHITE)
-            .append(Text.literal("Thanks for installing! Use /buconfig to configure the mod.")
-                    .formatted(Formatting.GREEN));
-    private static final Text discordMessage = Text.literal("[Bazaar utils] ")
-            .formatted(Formatting.WHITE)
-            .append(Text.literal("For more help or to report a bug, join the ")
-                    .formatted(Formatting.GREEN)
-                    .append(Util.DISCORDLINK)
-                    .append(Text.literal("!")
-                            .formatted(Formatting.GREEN)));
-    private static final Text updateMessage = Text.literal("[Bazaar Utils] ")
-            .formatted(Formatting.WHITE)
-            .append(Text.literal(BazaarUtils.getUpdateNotes())
-                    .formatted(Formatting.DARK_GREEN));
+/**
+ * Sends a one-time welcome / update message after the player joins
+ * a world or server.  Forge 1.8.9 – no Fabric classes.
+ */
+public final class JoinMessages implements BUListener {
 
+    /* ─────────────────────────── formatted texts ─────────────────────────── */
 
-    @Override
-    public void subscribe(){
-        registerWelcomeMessageSender();
+    private static final ChatComponentText WELCOME = new ChatComponentText(
+            EnumChatFormatting.WHITE  + "[Bazaar Utils] " +
+            EnumChatFormatting.GREEN  + "Thanks for installing!  Use /buconfig to configure the mod.");
+
+    private static final ChatComponentText DISCORD = new ChatComponentText(
+            EnumChatFormatting.WHITE  + "[Bazaar Utils] " +
+            EnumChatFormatting.GREEN  + "Need help or found a bug?  Join the Discord: "
+            + EnumChatFormatting.AQUA + "https://discord.gg/xDKjvm5hQd");
+
+    private static ChatComponentText UPDATE()
+    {
+        return new ChatComponentText(EnumChatFormatting.WHITE + "[Bazaar Utils] "
+                + EnumChatFormatting.DARK_GREEN + BazaarUtils.getUpdateNotes());
     }
 
-    //TODO gotta be a better way to do the null checks
-    private static void registerWelcomeMessageSender() {
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
-                var isFirstLoad = BUConfig.get().firstLoad;
-                if (isFirstLoad) {
-                    Util.tickExecuteLater(40, () -> {
-                        if (client.player != null)
-                            client.player.sendMessage(welcomeMessage, false);
-                        Util.tickExecuteLater(60, () -> {
-                            if (client.player != null)
-                                Util.notifyAll(Util.HELPMESSAGE);
+    /* ─────────────────────────── state flags ─────────────────────────────── */
 
-                            Util.tickExecuteLater(40, () -> {
-                                if (client.player != null)
-                                    client.player.sendMessage(discordMessage, false);
-                            });
+    private boolean sentThisSession = false;
+    private boolean waitingForPlayer = true;      // true until first player tick
 
-                        });
-                    });
+    /* ─────────────────────────── BUListener hook ─────────────────────────── */
+
+    @Override
+    public void subscribe() {
+
+        /* Poll once every client-tick until a player exists, then send messages */
+        Util.tickExecuteLater(1, new Runnable() {
+            @Override public void run() {
+                Minecraft mc = Minecraft.getMinecraft();
+                if (mc.thePlayer == null) {              // still on title-screen?
+                    Util.tickExecuteLater(10, this);     // try again in 10 ticks
+                    return;
+                }
+                if (sentThisSession) return;             // already greeted
+
+                if (BUConfig.get().firstLoad) {
+                    sendDelayed(WELCOME,  40);
+                    sendDelayed(new ChatComponentText(Util.HELPMESSAGE), 60);
+                    sendDelayed(DISCORD,  100);
+
                     BUConfig.get().firstLoad = false;
                     BUConfig.HANDLER.save();
                 }
 
-                if(BazaarUtils.updatedMajorVersion && !isFirstLoad){
-                    Util.tickExecuteLater(40, () -> client.player.sendMessage(updateMessage, false));
-                    Util.tickExecuteLater(41, () -> client.player.sendMessage(Util.CHANGELOG, false));
+                if (BazaarUtils.updatedMajorVersion) {
+                    sendDelayed(UPDATE(), 40);
                     BazaarUtils.updatedMajorVersion = false;
                 }
+                sentThisSession = true;
+            }
         });
     }
 
+    /* ─────────────────────────── tiny helper ────────────────────────────── */
+
+    private static void sendDelayed(final ChatComponentText msg, int ticks) {
+        Util.tickExecuteLater(ticks, () -> {
+            Minecraft mc = Minecraft.getMinecraft();
+            if (mc.thePlayer != null) mc.thePlayer.addChatMessage(msg);
+        });
+    }
 }
