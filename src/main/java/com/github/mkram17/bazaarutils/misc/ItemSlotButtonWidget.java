@@ -5,51 +5,88 @@ import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.client.renderer.RenderHelper;
 import net.minecraft.client.renderer.entity.RenderItem;
+import net.minecraft.util.ResourceLocation;
 import net.minecraft.item.ItemStack;
 
 /**
- * Small square button that renders an ItemStack and runs a callback on click.
- * Pure Forge 1.8.9 – no Fabric / Lombok / modern APIs required.
+ * A tiny 18 × 18 square button that can either:
+ * <ul>
+ *   <li>render an {@link ItemStack} icon, <b>or</b></li>
+ *   <li>show two 16 × 16 textures (normal/hover)</li>
+ * </ul>
+ *
+ * Pure Forge 1.8.9 – no Fabric/YACL/Lombok required.
  */
 public final class ItemSlotButtonWidget extends GuiButton {
 
-    /* ------------------------------------------------------------------ */
-    /*  Functional callback (Forge 1.8.9 has no built-in functional types)*/
-    /* ------------------------------------------------------------------ */
+    /* ───────────────────────── functional helper ───────────────────── */
     public interface PressAction { void onPress(ItemSlotButtonWidget btn); }
 
-    /* ------------------------------------------------------------------ */
-    /*  Immutable runtime data                                            */
-    /* ------------------------------------------------------------------ */
-    private final ItemStack  icon;
-    private final PressAction onPress;
+    /* ───────────────────────── immutable data ──────────────────────── */
+    private final ItemStack        icon;        // optional (may be null)
+    private final ResourceLocation texBase;     // optional (may be null)
+    private final ResourceLocation texHover;    // optional (may be null)
+    private final PressAction      onPress;
+    private final String           tooltip;     // unused in core logic
 
-    /* ------------------------------------------------------------------ */
-    /*  Construction                                                      */
-    /* ------------------------------------------------------------------ */
+    /* ────────────────────────── constructors ───────────────────────── */
+
+    /** Icon-based variant (original behaviour). */
     public ItemSlotButtonWidget(int x, int y, int size,
                                 ItemStack icon,
                                 PressAction onPress) {
-
-        /* GuiButton(id,x,y,width,height,text) – we never need an id       */
-        super(-1, x, y, size, size, "");
-        this.icon    = icon == null ? null : icon.copy();
-        this.onPress = onPress;
+        this(x, y, size, icon, null, null, onPress, null);
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Drawing                                                           */
-    /* ------------------------------------------------------------------ */
+    /** Internal shared ctor, also used by the textured factory. */
+    private ItemSlotButtonWidget(int x, int y, int size,
+                                 ItemStack icon,
+                                 ResourceLocation base,
+                                 ResourceLocation hover,
+                                 PressAction onPress,
+                                 String tooltip) {
+        super(-1, x, y, size, size, "");
+        this.icon     = icon == null ? null : icon.copy();
+        this.texBase  = base;
+        this.texHover = hover == null ? base : hover;
+        this.onPress  = onPress;
+        this.tooltip  = tooltip;
+    }
+
+    /* ───────────────────────── factory for textured buttons ────────── */
+    public static ItemSlotButtonWidget textured(int x, int y, int size,
+                                                ResourceLocation base,
+                                                ResourceLocation hover,
+                                                Runnable      click,
+                                                String        tooltip) {
+        return new ItemSlotButtonWidget(
+                x, y, size,
+                null, base, hover,
+                b -> { if (click != null) click.run(); }, tooltip);
+    }
+
+    /* ───────────────────────── drawing ─────────────────────────────── */
     @Override
     public void drawButton(Minecraft mc, int mouseX, int mouseY) {
         if (!visible) return;
 
-        /* simple semi-transparent white slot background                   */
-        drawRect(xPosition, yPosition,
-                 xPosition + width, yPosition + height,
-                 0x80FFFFFF);
+        /* hover detection via superclass helper                          */
+        this.hovered = mouseX >= xPosition && mouseY >= yPosition &&
+                       mouseX <  xPosition + width &&
+                       mouseY <  yPosition + height;
 
-        /* render the item icon if present                                 */
+        /* ----------------------------------------------------------------
+           1) TEXTURED variant (cog, arrows, ...)
+           ---------------------------------------------------------------- */
+        if (texBase != null) {
+            mc.getTextureManager().bindTexture(hovered ? texHover : texBase);
+            // drawTexturedModalRect(u,v): we reuse GuiButton helper
+            drawTexturedModalRect(xPosition, yPosition, 0, 0, width, height);
+        }
+
+        /* ----------------------------------------------------------------
+           2) ICON variant  (original behaviour)
+           ---------------------------------------------------------------- */
         if (icon != null && icon.stackSize > 0) {
             RenderHelper.enableGUIStandardItemLighting();
             RenderItem ri = mc.getRenderItem();
@@ -60,9 +97,7 @@ public final class ItemSlotButtonWidget extends GuiButton {
         }
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Mouse interaction                                                 */
-    /* ------------------------------------------------------------------ */
+    /* ───────────────────────── mouse click ─────────────────────────── */
     @Override
     public boolean mousePressed(Minecraft mc, int mx, int my) {
         boolean inside = super.mousePressed(mc, mx, my);
@@ -70,9 +105,7 @@ public final class ItemSlotButtonWidget extends GuiButton {
         return inside;
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Helper ­– safe co-ordinates inside a GuiContainer                 */
-    /* ------------------------------------------------------------------ */
+    /* ─────────────────── safe-area helper for containers ───────────── */
     public static final class ScreenWidgetDimensions {
         public final int x, y, backgroundWidth;
         public ScreenWidgetDimensions(int x, int y, int bw) {
@@ -80,40 +113,32 @@ public final class ItemSlotButtonWidget extends GuiButton {
         }
     }
 
-    /**
-     * Reflectively obtain {@code guiLeft}, {@code guiTop} and {@code xSize}
-     * from any {@link GuiContainer}.  Works on obfuscated 1.8.9 jars as well
-     * (fallback SRG names are provided).
-     */
+    /** Reflection helper that works on obfuscated 1.8.9 jars as well. */
     public static ScreenWidgetDimensions getSafeScreenDimensions(GuiContainer gui) {
-
         try {
             int left =  (Integer) getField(gui, "guiLeft",  "field_147003_i");
             int top  =  (Integer) getField(gui, "guiTop",   "field_147009_r");
             int size =  (Integer) getField(gui, "xSize",    "field_146999_f");
-
             return new ScreenWidgetDimensions(left, top, size);
-        } catch (Exception e) {
-            /* fallback: standard 176×166 vanilla container                */
-            return new ScreenWidgetDimensions( (gui.width  - 176) / 2,
-                                               (gui.height - 166) / 2,
-                                               176);
+        } catch (Exception ignored) {
+            // fallback: vanilla 176 × 166 container
+            return new ScreenWidgetDimensions((gui.width  - 176) / 2,
+                                              (gui.height - 166) / 2,
+                                              176);
         }
     }
 
-    /* reflect helper with unobfuscated + SRG fallback names               */
-    private static Object getField(Object obj, String mcp, String srg) throws Exception {
+    private static Object getField(Object o, String mcp, String srg) throws Exception {
         try {
-            java.lang.reflect.Field f = obj.getClass().getField(mcp);
-            return f.get(obj);
+            java.lang.reflect.Field f = o.getClass().getField(mcp);  return f.get(o);
         } catch (NoSuchFieldException e) {
-            java.lang.reflect.Field f = obj.getClass().getField(srg);
-            return f.get(obj);
+            java.lang.reflect.Field f = o.getClass().getField(srg);  return f.get(o);
         }
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Simple accessor                                                   */
-    /* ------------------------------------------------------------------ */
+    /* ───────────────────────── simple accessor ─────────────────────── */
     public ItemStack getIcon() { return icon; }
+
+    /* tooltip getter (future use) */
+    public String getTooltipText() { return tooltip; }
 }
