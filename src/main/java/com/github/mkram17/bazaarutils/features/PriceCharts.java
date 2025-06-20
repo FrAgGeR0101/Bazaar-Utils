@@ -1,92 +1,93 @@
 package com.github.mkram17.bazaarutils.features;
 
 import com.github.mkram17.bazaarutils.BazaarUtils;
-import com.github.mkram17.bazaarutils.config.BUConfig;
+import com.github.mkram17.bazaarutils.data.BazaarData;
 import com.github.mkram17.bazaarutils.events.BUListener;
-import com.github.mkram17.bazaarutils.misc.CustomItemButton;          // for the tiny Option-stub
-import net.minecraft.client.Minecraft;                               // 1.8.9 class
+import com.github.mkram17.bazaarutils.utils.SoundUtil;
+import com.github.mkram17.bazaarutils.utils.Util;
+import net.minecraft.client.Minecraft;
+import net.minecraft.inventory.Slot;
 import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.nbt.NBTTagString;
 import net.minecraft.util.EnumChatFormatting;
 
 import java.awt.Desktop;
 import java.net.URI;
 
 /**
- * Lightweight Forge-1.8.9 “Price-Charts” helper.<br>
- * <br>
- * – Adds a clickable tooltip line to Bazaar items (only while inside the
- *   Bazaar unless the optional config toggle is enabled).<br>
- * – CTRL + SHIFT click on an item opens its skyblock.finance page.<br>
- * <br>
- * All Fabric / YACL / Orbit dependencies have been stripped so the file
- * compiles on a pure Forge 1.8.9 environment.
+ * Very small helper that adds a “CTRL + SHIFT click for price chart” line
+ * to Bazaar item tool-tips.  A click opens the corresponding
+ * <a href="https://skyblock.finance">skyblock.finance</a> page.
+ *
+ * <p>Written for pure Forge 1.8.9 – no Fabric, Lombok, or modern APIs.</p>
  */
 public final class PriceCharts implements BUListener {
 
     /* ------------------------------------------------------------------ */
-    /*  User-configurable toggle                                          */
+    /*  User flag (serialised in your JSON config elsewhere)              */
+    /* ------------------------------------------------------------------ */
+    private boolean showOutsideBazaar = false;
+
+    public boolean isShowOutsideBazaar()              { return showOutsideBazaar; }
+    public void    setShowOutsideBazaar(boolean flag) { showOutsideBazaar = flag; }
+
+    /* ------------------------------------------------------------------ */
+    /*  Core logic                                                         */
     /* ------------------------------------------------------------------ */
 
-    private boolean showOutsideBazaar = false;          // config field
+    private static final String TAG_KEY   = "BU_financeId";
+    private static final String FINANCE   = "https://skyblock.finance/items/";
 
-    public boolean isShowOutsideBazaar()        { return showOutsideBazaar; }
-    public void    setShowOutsideBazaar(boolean v) { showOutsideBazaar = v; }
-
-    /* ------------------------------------------------------------------ */
-    /*  Tooltip + click logic (very small)                                */
-    /* ------------------------------------------------------------------ */
-
-    private static final String FINANCE_URL = "https://skyblock.finance/items/";
-
-    /** Insert one extra tooltip line when we are allowed to show it. */
+    /** Inject one extra line into the vanilla tooltip list. */
     public void addTooltip(ItemStack stack, java.util.List<String> lines) {
-        if (stack == null || stack.isEmpty()) return;
+
+        if (stack == null || stack.stackSize == 0) return;        // no isEmpty in 1.8.9
         if (!shouldShow())                    return;
 
-        String productId = BazaarUtils.GUI.getProductIdForStack(stack);
-        if (productId == null) return;                    // no Bazaar item
+        /* Best-effort product-id lookup via display-name                */
+        String cleanName = Util.removeFormatting(stack.getDisplayName());
+        String productId = BazaarData.findProductId(cleanName);
+        if (productId == null) return;                            // not a Bazaar item
 
         lines.add(EnumChatFormatting.GOLD + "" + EnumChatFormatting.BOLD +
                   "CTRL+SHIFT-click for price-chart");
-        stack.setTagInfo("BU_financeId", new net.minecraft.nbt.NBTTagString(productId));
+
+        /* remember the id inside the stack so the click-handler can use it */
+        NBTTagCompound tag = stack.getTagCompound();
+        if (tag == null) stack.setTagCompound(tag = new NBTTagCompound());
+        tag.setTag(TAG_KEY, new NBTTagString(productId));
     }
 
-    /** Called from the generic slot-click hook in {@link com.github.mkram17.bazaarutils.events.SlotClickEvent}. */
-    public void onSlotClick(net.minecraft.inventory.Slot slot, boolean ctrlDown, boolean shiftDown) {
-        if (!ctrlDown || !shiftDown)                   return;
-        if (!shouldShow())                             return;
+    /** Called from the global SlotClickEvent mix-in. */
+    public void onSlotClick(Slot slot, boolean ctrl, boolean shift) {
 
-        ItemStack stack = slot.getStack();
-        if (stack == null || stack.isEmpty())          return;
-        if (!stack.hasTagCompound())                   return;
-        if (!stack.getTagCompound().hasKey("BU_financeId")) return;
+        if (!ctrl || !shift)               return;
+        if (!shouldShow())                 return;
 
-        String id = stack.getTagCompound().getString("BU_financeId");
-        openInBrowser(FINANCE_URL + id);
+        ItemStack st = slot.getStack();
+        if (st == null || st.stackSize == 0) return;
+
+        NBTTagCompound tag = st.getTagCompound();
+        if (tag == null || !tag.hasKey(TAG_KEY)) return;
+
+        openBrowser(FINANCE + tag.getString(TAG_KEY));
+        SoundUtil.notifyMultipleTimes(2);                // quick audio feedback
     }
 
-    private static void openInBrowser(String url) {
-        try {
-            if (Desktop.isDesktopSupported())
-                Desktop.getDesktop().browse(new URI(url));
-        } catch (Exception ignored) { /* best-effort */ }
-    }
+    /* ------------------------------------------------------------------ */
+    /*  Helper utilities                                                  */
+    /* ------------------------------------------------------------------ */
 
     private boolean shouldShow() {
         return BazaarUtils.GUI.inBazaar() || showOutsideBazaar;
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Config-GUI helper (uses the stub from CustomItemButton)           */
-    /* ------------------------------------------------------------------ */
-
-    public CustomItemButton.Option<Boolean> createOption() {
-        return CustomItemButton.Option.<Boolean>builder()
-                .name("Price-chart tooltip outside Bazaar")
-                .description("Show the CTRL+SHIFT tooltip everywhere, not " +
-                             "just inside Bazaar item screens.")
-                .binding(false, this::isShowOutsideBazaar, this::setShowOutsideBazaar)
-                .build();
+    private static void openBrowser(String url) {
+        try {
+            if (Desktop.isDesktopSupported())
+                Desktop.getDesktop().browse(new URI(url));
+        } catch (Exception ignored) { /* silent */ }
     }
 
     /* ------------------------------------------------------------------ */
@@ -95,7 +96,6 @@ public final class PriceCharts implements BUListener {
 
     @Override
     public void subscribe() {
-        // Hook into the central tooltip + click callbacks that already exist
         BazaarUtils.EVENT_BUS.subscribe(this);
     }
 }
