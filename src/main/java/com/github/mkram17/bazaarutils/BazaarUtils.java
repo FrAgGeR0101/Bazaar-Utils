@@ -7,167 +7,89 @@ import com.github.mkram17.bazaarutils.features.StashHelper;
 import com.github.mkram17.bazaarutils.misc.ModCompatibilityHelper;
 import com.github.mkram17.bazaarutils.utils.Commands;
 import com.github.mkram17.bazaarutils.utils.GUIUtils;
-import com.mojang.serialization.Codec;
-import de.siphalor.amecs.api.AmecsKeyBinding;
-import lombok.Getter;
-import meteordevelopment.orbit.EventBus;
-import meteordevelopment.orbit.IEventBus;
-import net.fabricmc.api.ClientModInitializer;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.fabricmc.loader.api.FabricLoader;
-import net.fabricmc.loader.api.metadata.CustomValue;
-import net.fabricmc.loader.api.metadata.ModMetadata;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.component.DataComponentType;
-import net.minecraft.item.Items;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.Minecraft;
+import net.minecraft.init.Items;
+import net.minecraft.item.ItemStack;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.common.Mod.EventHandler;
+import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 
-import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Main Fabric entry-point for Bazaar-Utils.
+ * Forge-1.8.9 entry-point for Bazaar-Utils.
+ *
+ * Completely standalone – no Fabric-API, Lombok, Orbit, Amecs, or modern
+ * 1.20.x component system required.
  */
-public final class BazaarUtils implements ClientModInitializer {
+@Mod(modid = BazaarUtils.MODID,
+     name  = "Bazaar Utils",
+     version = "1.0.0",
+     clientSideOnly = true)
+public final class BazaarUtils {
 
     /* -------------------------------------------------------- */
     /*  Public constants / globals                              */
     /* -------------------------------------------------------- */
 
-    public static final String   MODID      = "bazaarutils";
-    public static final IEventBus EVENT_BUS = new EventBus();          // Orbit bus
-    public static final GUIUtils  GUI        = new GUIUtils();
+    public static final String MODID = "bazaarutils";
 
-    public static StashHelper                STASH_HELPER;
-    public static final List<KeyBinding>     KEYBINDS = new ArrayList<>();
+    /** Lightweight helpers used everywhere in the mod. */
+    public static final GUIUtils GUI = new GUIUtils();
 
-    public static boolean updatedMajorVersion = false;
+    /** Optional stash-helper (key-binding, tick-handler …). */
+    public static StashHelper STASH_HELPER;
 
-    @Getter private static String updateNotes = "n/a";
-
-    /* -------------------------------------------------------- */
-    /*  Component-types (custom NBT-style data)                 */
-    /* -------------------------------------------------------- */
-
-    public static final DataComponentType<String>  CUSTOM_SIZE_COMPONENT = Registry.register(
-            Registries.DATA_COMPONENT_TYPE,
-            new Identifier(MODID, "custom_size"),
-            DataComponentType.<String>builder().codec(Codec.STRING).build()
-    );
-
-    public static final DataComponentType<Boolean> CUSTOM_SHOWPRICECHART_COMPONENT = Registry.register(
-            Registries.DATA_COMPONENT_TYPE,
-            new Identifier(MODID, "has_price_chart"),
-            DataComponentType.<Boolean>builder().codec(Codec.BOOL).build()
-    );
+    /* Transient listeners created at run-time (plus those deserialised
+       from the config) – kept so we can unsubscribe on shutdown later
+       if that ever becomes necessary. */
+    private static final List<BUListener> ALL_LISTENERS = new ArrayList<>();
 
     /* -------------------------------------------------------- */
-    /*  Client entry-point                                      */
+    /*  Forge lifecycle                                         */
     /* -------------------------------------------------------- */
 
-    @Override
-    public void onInitializeClient() {
+    @EventHandler
+    public void init(FMLInitializationEvent event) {
 
-        /* Load (or create) config ------------------------------------ */
+        /* 1) Load or create the JSON config ------------------------ */
         BUConfig.HANDLER.load();
 
-        /* Apply run-time compatibility patches ----------------------- */
+        /* 2) Apply run-time compatibility patches for other mods --- */
         ModCompatibilityHelper.initializePatches();
 
-        /* Read mod-metadata (updates / changelog etc.) --------------- */
-        extractModMetadata();
+        /* 3) Register “/bu …” chat-based commands ------------------ */
+        Commands.register();   // implemented with a chat-listener internally
 
-        /* Prepare Orbit event-bus lambda support --------------------- */
-        EVENT_BUS.registerLambdaFactory(
-                "com.github.mkram17.bazaarutils",
-                (lookupInMethod, klass) ->
-                        (MethodHandles.Lookup) lookupInMethod.invoke(null, klass, MethodHandles.lookup())
-        );
-
-        /* Register commands & key-bindings --------------------------- */
-        registerCommands();
-        registerKeyBindings();
-
-        /* Subscribe all listeners (config + transient) --------------- */
-        subscribeListeners();
-
-        /* Populate default config entries on first run --------------- */
-        createDefaultBookmarks();
-    }
-
-    /* -------------------------------------------------------- */
-    /*  Helpers                                                 */
-    /* -------------------------------------------------------- */
-
-    /** Register /bu … commands via Fabric-API callback. */
-    private static void registerCommands() {
-        ClientCommandRegistrationCallback.EVENT.register(
-                (dispatcher, __) -> Commands.register(dispatcher)
-        );
-    }
-
-    /** Register the stash-helper key-binding (Amecs optional). */
-    private static void registerKeyBindings() {
-        if (!ModCompatibilityHelper.isAmecsReborn()) return;
-
+        /* 4) Key-binding helper (simple tick-counter in 1.8.9) ------ */
         STASH_HELPER = new StashHelper();
-        STASH_HELPER.registerTickCounter();
-        KEYBINDS.add(STASH_HELPER);
+        STASH_HELPER.registerTickCounter();   // hooks END_CLIENT_TICK
 
-        for (KeyBinding kb : KEYBINDS) {
-            /* Only AmecsKeyBinding allows per-key repeat-delay options */
-            if (kb instanceof AmecsKeyBinding) {
-                KeyBindingHelper.registerKeyBinding(kb);
-            }
-        }
-    }
+        /* 5) Gather & subscribe every listener --------------------- */
+        BUListener.addTransientEvents();                     // create on-the-fly
+        ALL_LISTENERS.addAll(BUListener.getTransientEvents());
+        ALL_LISTENERS.addAll(BUConfig.get().getSerializedEvents());
+        ALL_LISTENERS.forEach(BUListener::subscribe);
 
-    /** Gather & subscribe every BUListener instance. */
-    private static void subscribeListeners() {
-        BUListener.addTransientEvents();                        // create runtime listeners
-
-        List<BUListener> all   = BUListener.getTransientEvents();
-        all.addAll(BUConfig.get().getSerializedEvents());       // + persistent
-
-        all.forEach(BUListener::subscribe);
-    }
-
-    /** First-run defaults (a single “Diamond” bookmark). */
-    private static void createDefaultBookmarks() {
+        /* 6) First-run defaults – add a single “Diamond” bookmark --- */
         if (BUConfig.get().bookmarks.isEmpty()) {
-            BUConfig.get().bookmarks
-                     .add(new Bookmark("Diamond", Items.DIAMOND.getDefaultStack()));
+            BUConfig.get().bookmarks.add(
+                    new Bookmark("Diamond", new ItemStack(Items.diamond))
+            );
         }
+
+        /* 7) Register our utility listeners on the Forge bus -------- */
+        MinecraftForge.EVENT_BUS.register(this);
     }
 
-    /** Read `fabric.mod.json` custom fields & detect version bumps. */
-    private static void extractModMetadata() {
-        FabricLoader.getInstance().getModContainer(MODID).ifPresent(mc -> {
-            ModMetadata meta = mc.getMetadata();
+    /* -------------------------------------------------------- */
+    /*  Tiny helpers                                            */
+    /* -------------------------------------------------------- */
 
-            /* Latest changelog entry (custom value) */
-            CustomValue cv = meta.getCustomValue("latestMajorUpdateNotes");
-            if (cv != null) updateNotes = cv.getAsString();
-
-            /* Version-bump detection (major = “x.y” part) */
-            String previous = BUConfig.get().MODVERSION;
-            String current  = meta.getVersion().getFriendlyString();
-
-            BUConfig.get().MODVERSION = current;
-            BUConfig.HANDLER.save();
-
-            String prevMajor = previous.contains(".")
-                    ? previous.substring(previous.indexOf('.') + 1)
-                    : previous;
-            String currMajor = current.contains(".")
-                    ? current.substring(current.indexOf('.') + 1)
-                    : current;
-
-            updatedMajorVersion = !prevMajor.equals(currMajor);
-        });
+    /** Convenience shortcut: returns the client instance. */
+    public static Minecraft mc() {
+        return Minecraft.getMinecraft();
     }
 }
