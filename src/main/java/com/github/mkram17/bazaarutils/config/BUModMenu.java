@@ -1,14 +1,13 @@
 package com.github.mkram17.bazaarutils.config;
 
-import com.terraformersmc.modmenu.api.ConfigScreenFactory;
-import com.terraformersmc.modmenu.api.ModMenuApi;
-
-public class BUModMenu implements ModMenuApi {
-    @Override
-    public ConfigScreenFactory<?> getModConfigScreenFactory() {
-        return parentScreen -> BUConfig.get().createGUI(parentScreen);
-    }
-
-
-
+/**
+ * Empty stub for Forge builds.
+ *
+ * On Fabric, Bazaar-Utils provides a real ModMenu integration
+ * (via the ModMenu-API).  That class is excluded from the Forge
+ * source-set.  For Forge we only need the class to exist so that
+ * references do not break compilation – no functionality required.
+ */
+public final class BUModMenu {
+    /* Intentionally left blank – Fabric-only feature */
 }
