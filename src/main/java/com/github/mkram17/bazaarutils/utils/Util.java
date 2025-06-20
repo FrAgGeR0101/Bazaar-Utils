@@ -3,13 +3,9 @@ package com.github.mkram17.bazaarutils.utils;
 import com.github.mkram17.bazaarutils.config.BUConfig;
 import com.github.mkram17.bazaarutils.events.BUListener;
 import com.github.mkram17.bazaarutils.misc.ItemData;
-import lombok.AllArgsConstructor;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.text.ClickEvent;
-import net.minecraft.text.HoverEvent;
-import net.minecraft.text.MutableText;
-import net.minecraft.text.Text;
+import net.minecraft.text.*;
 import net.minecraft.util.Formatting;
 import org.apache.logging.log4j.LogManager;
 
@@ -17,309 +13,208 @@ import java.awt.*;
 import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.StringSelection;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
+import java.nio.file.Path;
+import java.util.*;
 
-public class Util implements BUListener {
-    public static void sendCommand(String command){
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) {
-            client.player.networkHandler.sendChatCommand(command);
+/**
+ * Generic helpers (chat notifications, clipboard, file-IO, tick scheduling …).
+ */
+public final class Util implements BUListener {
+
+    /* ------------------------------------------------------------------ */
+    /*  developer-notification helpers                                   */
+    /* ------------------------------------------------------------------ */
+
+    public enum NotificationType {
+        GUI, FEATURE, BAZAARDATA, COMMAND, ITEMDATA;
+
+        /** Whether this notification category is enabled in the config. */
+        public boolean isEnabled() {
+            return BUConfig.get().developer.isDevMessageEnabled(this);
         }
     }
+
+    /* The global task-queue executed from END_CLIENT_TICK -------------- */
+    private static final LinkedList<ScheduledTask> TASKS = new LinkedList<>();
+
+    /* Simple help / info strings -------------------------------------- */
+    public static final String HELPMESSAGE = """
+            §eCommands: §7/bu or /bazaarutils opens the settings GUI
+            §6----------------------------------------
+            §7/bu tax <amount> – set Bazaar tax
+            §7/bu customorder … – manage custom orders
+            §6----------------------------------------""";
+
+    public static final Text DISCORD_LINK  = Text.literal("Discord server")
+            .styled(style -> style
+                    .withBold(true)
+                    .withClickEvent(ClickEvent.openUrl(URI.create("https://discord.gg/xDKjvm5hQd")))
+                    .withHoverEvent(HoverEvent.showText(Text.literal("Click to join the Discord!"))));
+
+    public static final Text CHANGELOG_LINK = Text.literal("Click to see changelog")
+            .styled(style -> style
+                    .withBold(true)
+                    .withColor(Formatting.GREEN)
+                    .withClickEvent(ClickEvent.openUrl(URI.create("https://modrinth.com/mod/bazaar-utils/changelog")))
+                    .withHoverEvent(HoverEvent.showText(Text.literal("Latest update notes"))));
+
+    /* ------------------------------------------------------------------ */
+    /*  BUListener implementation                                        */
+    /* ------------------------------------------------------------------ */
 
     @Override
     public void subscribe() {
         subscribeTicks();
     }
 
-    public enum notificationTypes {GUI, FEATURE, BAZAARDATA, COMMAND, ITEMDATA;
-        public boolean isEnabled() {
-            return BUConfig.get().developer.isDeveloperVariableEnabled(this);
-        }
-    }
-    private static final LinkedList<ScheduledTask> tasks = new LinkedList<>();
-    public static final String HELPMESSAGE = "Commands: /bu or /bazaarutils to open settings gui. \n---------------------------\n " +
-            "/bu tax {amount} to set bazaar tax. This is important for the mod to function correctly. /bu customorders to see current Custom Orders. /bu customorder {order amount} {slot number} to make new Custom Order /bu customorder remove {customorder number} to remove Custom Order (find number by using /bu customorders) \n---------------------------\n  ";
-    public static final Text DISCORDLINK = Text.literal("Discord server")
-            .styled(style -> {
-                        //? if > 1.21.4 {
-                        try {
-                            return style
-                                    .withBold(true)
-                                    .withClickEvent(new ClickEvent.OpenUrl(new URI("https://discord.gg/xDKjvm5hQd")))
-                                    .withHoverEvent(new HoverEvent.ShowText(Text.literal("Click to join the Discord!")));
-                        } catch (URISyntaxException e) {
-                            throw new RuntimeException(e);
-                        }
-                    });
-                    //?} else {
-                        /*return style
-                                .withBold(true)
-                                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, "https://discord.gg/xDKjvm5hQd"))
-                                .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal("Click to join the Discord!")));
-                    });
-        *///?}
-        public static final Text CHANGELOG = Text.literal("Click To See Changelog")
-            .styled(style -> {
-                        //? if > 1.21.4 {
-                        try {
-                            return style
-                                    .withBold(true)
-                                    .withClickEvent(new ClickEvent.OpenUrl(new URI("https://modrinth.com/mod/bazaar-utils/changelog")))
-                                    .withHoverEvent(new HoverEvent.ShowText(Text.literal("Click to see the changelog")))
-                                    .withFormatting(Formatting.GREEN);
-                        } catch (URISyntaxException e) {
-                            throw new RuntimeException(e);
-                        }
-                    });
-                    //?} else {
-                        /*return style
-                                .withBold(true)
-                                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, "https://modrinth.com/mod/bazaar-utils/changelog"))
-                                .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal("Click to see the changelog")))
-                                .withFormatting(Formatting.GREEN);
-                    });
-        *///?}
+    /* ------------------------------------------------------------------ */
+    /*  Chat + log helpers                                                */
+    /* ------------------------------------------------------------------ */
 
     public static void notifyAll(String message) {
-        String callingName = getCallingClassName();
+        notifyAll(message, NotificationType.GUI);
+    }
 
-        MutableText messageText = Text.literal("[Bazaar Utils] ").formatted(Formatting.GOLD);
-        messageText.append(Text.literal(message).formatted(Formatting.WHITE));
+    public static void notifyAll(String message, NotificationType type) {
+
+        if (!type.isEnabled() && !BUConfig.get().developer.allMessages) return;
+
+        MutableText txt = Text.literal("[Bazaar Utils] ")
+                               .formatted(Formatting.GOLD)
+                               .append(Text.literal(message).formatted(Formatting.WHITE));
 
         if (MinecraftClient.getInstance().player != null)
-            MinecraftClient.getInstance().player.sendMessage(messageText, false);
-        LogManager.getLogger(callingName).info("[Bazaar Utils] Message [" + message + "]");
+            MinecraftClient.getInstance().player.sendMessage(txt, false);
+
+        LogManager.getLogger(getCallingClassName())
+                  .info("[Bazaar-Utils] " + message);
     }
 
-    public static void notifyError(String message, Throwable e) {
-        String callingName = getCallingClassName();
-        Text messageText = Text.literal("[Bazaar Utils Error]: " + message)
-                .styled(style -> {
-                    //? if > 1.21.4 {
-                    try {
-                        return style.withColor(Formatting.RED)
-                                .withClickEvent(new ClickEvent.OpenUrl(new URI("https://discord.gg/xDKjvm5hQd")))
-                                .withHoverEvent(new HoverEvent.ShowText(Text.literal("Click to join the Discord for support")));
-                    } catch (URISyntaxException uriSyntaxException) {
-                        throw new RuntimeException(uriSyntaxException);
-                    }
-                });
-        //?} else {
-                        /*return style
-                                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, "https://discord.gg/xDKjvm5hQd"))
-                                .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal("Click to join the Discord for support")));
-                    });
-            *///?}
+    public static void notifyError(String message, Throwable t) {
+        Text txt = Text.literal("[Bazaar-Utils Error] " + message)
+                .formatted(Formatting.RED)
+                .styled(s -> s.withClickEvent(ClickEvent.openUrl(
+                                URI.create("https://discord.gg/xDKjvm5hQd")))
+                              .withHoverEvent(HoverEvent.showText(Text.literal("Click for Discord support"))));
 
         if (MinecraftClient.getInstance().player != null)
-            MinecraftClient.getInstance().player.sendMessage(messageText, false);
+            MinecraftClient.getInstance().player.sendMessage(txt, false);
 
-        if(e != null){
-            LogManager.getLogger(callingName).error("[Bazaar Utils Error]: " + e.getMessage());
-            LogManager.getLogger(callingName).error("[Bazaar Utils] Error Stacktrace: " + message + "Stacktrace: " + Arrays.toString(e.getStackTrace()));
-        e.printStackTrace();
+        if (t != null) {
+            LogManager.getLogger(getCallingClassName()).error(message, t);
         } else {
-            LogManager.getLogger(callingName).error("[Bazaar Utils] Error: " + message);
+            LogManager.getLogger(getCallingClassName()).error(message);
         }
     }
 
-    public static void notifyAll(String message, notificationTypes notiType) {
-        String callingName = getCallingClassName();
-        String simpleCallingName = callingName.substring(callingName.lastIndexOf(".") + 1);
-        var messageText = Text.literal("[" + simpleCallingName + "] ").formatted(Formatting.GOLD).append(Text.literal(message).formatted(Formatting.DARK_GREEN));
+    /** Send a green clickable chat-message that runs the given command. */
+    public static void notifyChatCommand(Text text, String command) {
+        if (MinecraftClient.getInstance().player == null) return;
 
-        if(!notiType.isEnabled() && !BUConfig.get().developer.allMessages) {
-            if (BUConfig.get().developerMode)
-                LogManager.getLogger(callingName).info("[Bazaar Utils] Message [" + message + "]");
-            else
-                return;
-        }
+        Text styled = text.copy().styled(s -> s
+                .withClickEvent(ClickEvent.runCommand("/" + command))
+                .withHoverEvent(HoverEvent.showText(Text.literal("Run /" + command)))
+                .withColor(Formatting.GREEN));
 
-//            LogManager.getLogger(callingName).info("[Bazaar Utils] watchedItems state: " + BUConfig.get().watchedItems);
-
-            if (MinecraftClient.getInstance().player != null)
-                MinecraftClient.getInstance().player.sendMessage(messageText, false);
-            else
-                notifyError("Could not send notification because player is null. Message: " + message, null);
+        MinecraftClient.getInstance().player.sendMessage(styled, false);
     }
 
+    /* ------------------------------------------------------------------ */
+    /*  Config / data helpers                                             */
+    /* ------------------------------------------------------------------ */
 
-    public static void notifyChatCommand(MutableText message, String command){
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client != null && client.player != null) { // Add this check
-            client.player.sendMessage(message
-                    .styled(style -> style
-                                    //? if > 1.21.4 {
-                                    .withClickEvent(new ClickEvent.RunCommand("/" + command))
-                                    .withHoverEvent(new HoverEvent.ShowText(Text.literal("Run /" + command)))
-                            //?} else {
-                                /*.withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/" + command))
-                                .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal("Run /" + command)))
-                        *///?}
-                    ), false);
-        } else {
-            // Optionally log that the message couldn't be sent because the player was null
-            LogManager.getLogger(Util.class).warn("[Bazaar Utils] Could not send chat command notification because player is null. Message: " + message);
-        }
-    }
+    public static void addWatchedItem(ItemData item) {
+        if (item == null) return;
 
-    public static void addWatchedItem(ItemData item){
-        if(item == null)
-            return;
-        assert item.getProductID() != null;
         BUConfig.get().watchedItems.add(item);
-        notifyAll("Added item: § " + item.getGeneralInfo(), notificationTypes.ITEMDATA);
+        notifyAll("Added item: " + item.getGeneralInfo(), NotificationType.ITEMDATA);
         BUConfig.HANDLER.save();
         ItemData.update();
     }
 
-    public static void subscribeTicks() {
+    /* ------------------------------------------------------------------ */
+    /*  Tick-scheduler                                                    */
+    /* ------------------------------------------------------------------ */
+
+    private record ScheduledTask(int ticksLeft, Runnable action) {}
+
+    private static void subscribeTicks() {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            synchronized (tasks) {
-                Iterator<ScheduledTask> iterator = tasks.iterator();
-                while (iterator.hasNext()) {
-                    ScheduledTask task = iterator.next();
-                    task.ticksLeft--;
-                    if (task.ticksLeft <= 0) {
-                        task.action.run();
-                        iterator.remove();
+            synchronized (TASKS) {
+                Iterator<ScheduledTask> it = TASKS.iterator();
+                List<ScheduledTask> updated = new ArrayList<>();
+                while (it.hasNext()) {
+                    ScheduledTask t = it.next();
+                    if (t.ticksLeft() <= 1) {
+                        t.action().run();
+                        it.remove();
+                    } else {
+                        updated.add(new ScheduledTask(t.ticksLeft() - 1, t.action()));
+                        it.remove();
                     }
                 }
+                TASKS.addAll(updated);
             }
         });
     }
 
-
-    //this one runs asynch and other one runs on main thread (i think)
+    /** Schedule a task for N client ticks in the future. */
     public static void tickExecuteLater(int ticks, Runnable action) {
-        synchronized (tasks) {
-            tasks.add(new ScheduledTask(ticks, action));
+        synchronized (TASKS) {
+            TASKS.add(new ScheduledTask(ticks, action));
         }
     }
 
-    @AllArgsConstructor
-    private static class ScheduledTask {
-        int ticksLeft;
-        Runnable action;
+    /* ------------------------------------------------------------------ */
+    /*  Misc helpers                                                      */
+    /* ------------------------------------------------------------------ */
+
+    public static void sendCommand(String cmd) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player != null) mc.player.networkHandler.sendChatCommand(cmd);
     }
 
-
-    public static String getCallingClassName() {
-        StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
-        if (stackTrace.length > 3) {
-            String className = stackTrace[3].getClassName();
-            return className.substring(className.lastIndexOf(".") + 1);
-        }
-        return "UnknownClass";
+    public static void copyToClipboard(String str) {
+        Clipboard cb = Toolkit.getDefaultToolkit().getSystemClipboard();
+        cb.setContents(new StringSelection(str), null);
     }
 
-    //finds the first index that contains lookingFor, so there could be another later which would cause problems
-    public static int findComponentIndex(List<Text> components, String lookingFor){
-        int num = 0;
-        for(Text component : components){
-            if(component.getString().contains(lookingFor))
-                return num;
-            num++;
-        }
-            return -1;
-    }
-    public static String findComponentWith(List<Text> components, String lookingFor){
-        for(Text component : components){
-            if(component.getString().contains(lookingFor))
-                return component.getString();
-        }
-            return null;
+    public static String removeFormatting(String s) {
+        return s.replaceAll("§.", "").replace(",", "").trim();
     }
 
-    public static void copyToClipboard(String clip) {
-        Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-        clipboard.setContents(new StringSelection(clip), null);
+    public static double truncate(double v) {
+        return Math.round(v * 100) / 100.0;
     }
 
-    public static String removeFormatting(String str) {
-        return str.replaceAll("§.", "").replace(",", "").trim();
+    public static double pretty(double v) {
+        return truncate(Double.parseDouble(String.valueOf(v)
+                                           .replaceAll("\\.0$", "")
+                                           .replaceAll("(\\.\\d*?)0+$", "$1")));
     }
-    public static int parseNumber(String input) {
-        input = input.toUpperCase();
-        double value = Double.parseDouble(input.replaceAll("[^0-9.]", ""));
 
-        if (input.endsWith("K")) return (int) (value * 1_000);
-        if (input.endsWith("M")) return (int) (value * 1_000_000);
-        if (input.endsWith("B")) return (int) (value * 1_000_000_000);
-
-        return (int) value;
-    }
-    public static <T> void writeFile(T content) {
+    public static void writeFile(Object content) {
         try {
-            Files.write(Paths.get("bazaar_data.json"), content.toString().getBytes());
-            notifyAll("Data written to file successfully.");
+            Files.writeString(Path.of("bazaar_data.json"), content.toString());
+            notifyAll("Data written to bazaar_data.json");
         } catch (Exception e) {
-            System.out.println("Failed to write data to file");
-            e.printStackTrace();
+            notifyError("Failed to write file", e);
         }
     }
 
-    private static String capAtLength(String input, int limit, LengthJudger lengthJudger) {
-        int currentLength = 0;
-        int index = 0;
-        for (char c : input.toCharArray()) {
-            currentLength += lengthJudger.judgeLength(c);
-            if (currentLength >= limit) break;
-            index++;
-        }
-        return input.substring(0, index);
-    }
-    public static String extractTextAfterWord(String text, String word) {
-        if (text == null || word == null || text.isEmpty() || word.isEmpty()) {
-            return "";
-        }
+    /* -------------------------------------------------------- */
 
-        int wordIndex = text.indexOf(word);
-        if (wordIndex == -1) {
-            return ""; // Word not found
-        }
-
-        // Start looking after the word
-        int startIndex = wordIndex + word.length();
-        if (startIndex >= text.length()) {
-            return ""; // Word is at the end of the text
-        }
-
-        // Skip spaces after the word
-        while (startIndex < text.length() && Character.isWhitespace(text.charAt(startIndex))) {
-            startIndex++;
-        }
-
-        if (startIndex >= text.length()) {
-            return ""; // No non-space characters after the word
-        }
-
-        // Find the next space after non-space content
-        int endIndex = startIndex;
-        while (endIndex < text.length() && !Character.isWhitespace(text.charAt(endIndex))) {
-            endIndex++;
-        }
-
-        return removeFormatting(text.substring(startIndex, endIndex));
-    }
-    public static double removeTrailingZeroes(double value) {
-        return Double.parseDouble(String.valueOf(value).replaceAll("\\.0$", "").replaceAll("(\\.\\d*?)0+$", "$1"));
+    private static String getCallingClassName() {
+        StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+        return stack.length > 3
+                ? stack[3].getClassName()
+                : "UnknownClass";
     }
 
-    public static double truncateNumber(double number) {
-        return Math.round(number * 100) / 100.0;
-    }
-
-    public static double getPrettyNumber(double num) {
-        return truncateNumber(removeTrailingZeroes(num));
-    }
+    /* -------------------------------------------------------- */
+    /*  Functional interface                                    */
+    /* -------------------------------------------------------- */
 
     @FunctionalInterface
     public interface LengthJudger {
