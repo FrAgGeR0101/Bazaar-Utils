@@ -1,25 +1,44 @@
 package com.github.mkram17.bazaarutils.events;
 
-import lombok.Getter;
-import meteordevelopment.orbit.ICancellable;
-import net.minecraft.client.gui.screen.ingame.SignEditScreen;
+import net.minecraft.client.gui.GuiEditSign;
 
-public class SignOpenEvent implements ICancellable {
-    @Getter
-    private final SignEditScreen signEditScreen;
-    private boolean cancelled;
+/**
+ * Fired whenever the vanilla sign–editing GUI is opened.
+ *
+ * <p>No Lombok, no Orbit, no Fabric – just a tiny, self-contained POJO
+ * that other parts of the mod can populate / query.</p>
+ */
+public final class SignOpenEvent {
 
-    public SignOpenEvent(SignEditScreen signEditScreen) {
-        this.signEditScreen = signEditScreen;
+    /* ------------------------------------------------------------------
+       Immutable context
+       ------------------------------------------------------------------ */
+    private final GuiEditSign signGui;
+
+    /* ------------------------------------------------------------------
+       Mutable “cancelled” flag
+       ------------------------------------------------------------------ */
+    private boolean cancelled = false;
+
+    /* ------------------------------------------------------------------
+       Ctor
+       ------------------------------------------------------------------ */
+    public SignOpenEvent(GuiEditSign signGui) {
+        this.signGui = signGui;
     }
 
-    @Override
-    public void setCancelled(boolean cancelled) {
-        this.cancelled = cancelled;
+    /* ------------------------------------------------------------------
+       Accessors
+       ------------------------------------------------------------------ */
+    public GuiEditSign getSignGui() {
+        return signGui;
     }
 
-    @Override
     public boolean isCancelled() {
         return cancelled;
+    }
+
+    public void setCancelled(boolean cancelled) {
+        this.cancelled = cancelled;
     }
 }
