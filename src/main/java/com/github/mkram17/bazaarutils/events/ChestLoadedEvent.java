@@ -32,30 +32,38 @@ public class ChestLoadedEvent implements ICancellable, BUListener {
     }
 
     public static void registerScreenEvent() {
-        ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
-            if (screen instanceof GenericContainerScreen) {
-    GenericContainerScreen genericContainerScreen =
-        (GenericContainerScreen) screen;
-                CompletableFuture.runAsync(() -> checkIfGuiLoaded(genericContainerScreen)).thenRun(() -> {
-//                    Util.notifyAll("Chest loaded event went off!", Util.notificationTypes.GUI);
+       public static void registerScreenEvent() {
+    ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
+        /* ── Check that the current screen is a GenericContainerScreen ── */
+        if (screen instanceof GenericContainerScreen) {
+            GenericContainerScreen genericContainerScreen =
+                (GenericContainerScreen) screen;
 
-                    ChestLoadedEvent event = new ChestLoadedEvent();
-                    ScreenHandler handler = genericContainerScreen.getScreenHandler();
-                   if (handler instanceof GenericContainerScreenHandler) {
-    GenericContainerScreenHandler containerHandler =
-        (GenericContainerScreenHandler) handler;
-                        event.lowerChestInventory = containerHandler.getInventory();
-                        event.containerName = GUIUtils.getContainerName();
-                        event.itemStacks = returnItemStacks(event.lowerChestInventory);
-
-                        // Post to custom event bus
-                        BazaarUtils.eventBus.post(event);
-//                        Util.notifyAll("Chest Loaded Event posted!");
-                    }
+            // Optional async check preserved from upstream code
+            CompletableFuture.runAsync(() ->
+                    checkIfGuiLoaded(genericContainerScreen))
+                .thenRun(() -> {
+                    // Util.notifyAll("Chest loaded event went off!", Util.notificationTypes.GUI);
                 });
+
+            /* ── Build and post ChestLoadedEvent ── */
+            ChestLoadedEvent event = new ChestLoadedEvent();
+            ScreenHandler handler = genericContainerScreen.getScreenHandler();
+
+            if (handler instanceof GenericContainerScreenHandler) {
+                GenericContainerScreenHandler containerHandler =
+                    (GenericContainerScreenHandler) handler;
+
+                event.lowerChestInventory = containerHandler.getInventory();
+                event.containerName       = GUIUtils.getContainerName();
+                event.itemStacks          = returnItemStacks(event.lowerChestInventory);
+
+                BazaarUtils.eventBus.post(event);
+                // Util.notifyAll("Chest Loaded Event posted!");
             }
-        });
-    }
+        }
+    });
+}
 
     private static List<ItemStack> returnItemStacks(Inventory inventory) {
         List<ItemStack> stacks = new ArrayList<>();

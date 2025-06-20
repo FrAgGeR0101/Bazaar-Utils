@@ -261,8 +261,5 @@ switch (type) {
     case BAZAARDATA: return bazaarDataMessages;
     case COMMAND:    return commandMessages;
     case ITEMDATA:   return itemDataMessages;
-    default:         return guiMessages; 
-}
-        }
-    }
+    default:         return guiMessages;   
 }

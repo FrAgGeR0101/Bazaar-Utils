@@ -168,7 +168,7 @@ public class GUIUtils implements BUListener {
         try {
             Util.notifyAll("Closing sign", Util.notificationTypes.GUI);
             MinecraftClient mcclient = MinecraftClient.getInstance();
-            if (mcclient != null && mcclient.currentScreen instanceof AbstractSignEditScreen) {
+           if (mcclient != null && mcclient.currentScreen instanceof AbstractSignEditScreen) {
     AbstractSignEditScreen signEditScreen =
         (AbstractSignEditScreen) mcclient.currentScreen;
                 mcclient.execute(signEditScreen::close);

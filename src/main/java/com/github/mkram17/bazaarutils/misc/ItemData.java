@@ -52,12 +52,11 @@ public class ItemData {
             INSTABUY.opposite = INSTASELL;
         }
         public String getString(){
-            return switch (type) {
-                case INSTASELL -> "buy order";
-                case INSTABUY -> "sell order";
-            };
-        }
-    }
+   switch (this) {
+    case INSTASELL: return "buy order";
+    case INSTABUY:  return "sell order";
+    default:        return "order";
+}
     public enum statuses{SET,FILLED}
 
     //insta sell and insta buy

@@ -202,7 +202,9 @@ public class Bookmark extends CustomItemButton {
         String screenTitle = MinecraftClient.getInstance().currentScreen.getTitle().getString();
         boolean isTargetScreen = screenTitle.startsWith("Bazaar");
 
-        if (!(MinecraftClient.getInstance().currentScreen instanceof AccessorHandledScreen) || !isTargetScreen)
+       if (!(MinecraftClient.getInstance().currentScreen instanceof AccessorHandledScreen)) {
+    AccessorHandledScreen screen =
+        (AccessorHandledScreen) MinecraftClient.getInstance().currentScreen;
 {
     AccessorHandledScreen screen =
         (AccessorHandledScreen) MinecraftClient.getInstance().currentScreen;
