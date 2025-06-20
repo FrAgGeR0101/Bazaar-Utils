@@ -13,61 +13,58 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Small “settings cog” shown on every Bazaar GUI.
- * Forge 1.8.9 rewrite – no Fabric classes.
+ * Small cog-shaped button shown on every Bazaar GUI.
+ * Pure Forge-1.8.9 implementation (no Fabric classes).
  */
 public final class BazaarSettingsButton {
 
     /* ------------------------------------------------------------------ */
-    /*  texture locations (16 × 16 PNGs in assets/…/textures/widget/)     */
+    /*  Widget textures (assets/<modid>/textures/widget/ … )              */
     /* ------------------------------------------------------------------ */
     private static final ResourceLocation BASE  =
-            new ResourceLocation(BazaarUtils.MODID, "textures/widget/widget_settings_base.png");
+            new ResourceLocation(BazaarUtils.MODID,
+                                 "textures/widget/widget_settings_base.png");
     private static final ResourceLocation HOVER =
-            new ResourceLocation(BazaarUtils.MODID, "textures/widget/widget_settings_hover.png");
+            new ResourceLocation(BazaarUtils.MODID,
+                                 "textures/widget/widget_settings_hover.png");
 
     /* ------------------------------------------------------------------ */
-    /*  Public helper – returns a list with at most one widget            */
+    /*  Build button(s) for the *current* GUI                             */
     /* ------------------------------------------------------------------ */
     public static List<ItemSlotButtonWidget> getWidget() {
 
         Minecraft mc = Minecraft.getMinecraft();
 
-        /* Only render while the player is in *any* Bazaar screen */
-        if (!GUIUtils.inBazaar())            return Collections.emptyList();
-        if (mc.currentScreen == null)        return Collections.emptyList();
+        /* Only draw while inside *any* Bazaar screen */
+        if (!BazaarUtils.GUI.inBazaar())   return Collections.emptyList();
+        if (mc.currentScreen == null)      return Collections.emptyList();
 
-        /* Need handled-screen access for safe co-ordinates */
+        /* Need access to HandledScreen internals */
         if (!(mc.currentScreen instanceof AccessorHandledScreen))
             return Collections.emptyList();
         AccessorHandledScreen screen = (AccessorHandledScreen) mc.currentScreen;
 
-        /* ------------------------------------------------------------------
-           Determine safe position – to the left of the vanilla container
-           ------------------------------------------------------------------ */
+        /* Safe drawing-area co-ordinates inside the vanilla container */
         ItemSlotButtonWidget.ScreenWidgetDimensions dims =
                 ItemSlotButtonWidget.getSafeScreenDimensions(
                         screen,
-                        GUIUtils.getContainerName());
+                        GUIUtils.containerTitle());
 
-        final int SIZE    = 18;          // 18×18 px button
+        final int SIZE    = 18;        // 18×18 pixel button
         final int PADDING = 4;
-        final int x       = dims.x() - SIZE - PADDING;
-        final int y       = dims.y() + PADDING;
+        final int x       = dims.x - SIZE - PADDING;   // left of container
+        final int y       = dims.y + PADDING;          // top-aligned
 
-        /* ------------------------------------------------------------------
-           Build the widget (simple textured button with tooltip)
-           ------------------------------------------------------------------ */
-        ItemSlotButtonWidget btn = new ItemSlotButtonWidget(
+        /* Build the textured cog button */
+        ItemSlotButtonWidget cog = new ItemSlotButtonWidget(
                 x, y, SIZE, SIZE,
                 BASE, HOVER,
-                b -> mc.displayGuiScreen(
+                () -> mc.displayGuiScreen(
                         BUConfig.get().createGUI(mc.currentScreen)),
-                null,                     // icon slot (unused for cog)
-                "Bazaar-Utils Settings"); // tooltip
+                "Bazaar-Utils Settings");
 
         List<ItemSlotButtonWidget> out = new ArrayList<>(1);
-        out.add(btn);
+        out.add(cog);
         return out;
     }
 
