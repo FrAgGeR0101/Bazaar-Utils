@@ -18,7 +18,6 @@ import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ButtonTextures;
 import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.component.DataComponentTypes;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.screen.ScreenHandler;
@@ -30,226 +29,249 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-//TODO when itemStack cant be found, do not show bookmark option
+/** Bookmark button rendered on the right-hand side of the Bazaar GUI. */
 public class Bookmark extends CustomItemButton {
-    @Getter @Setter
-    public String name;
-    @Getter @Setter
-    public ItemStack bookmarkedItem;
-    protected boolean inCorrectGui = false;
-    private static final int SIGN_SLOT_NUMBER = 45;
 
-    private static final Identifier BASE = Identifier.tryParse(BazaarUtils.MODID, "widget/widget_bookmark_base");
-    private static final Identifier HOVER = Identifier.tryParse(BazaarUtils.MODID, "widget/widget_bookmark_hover");
-    public static final ButtonTextures SLOT_BUTTON_TEXTURES = new ButtonTextures(
-            BASE,
-            HOVER);
+    /* ------------------------------------------------------------------ */
+    /*  instance data                                                     */
+    /* ------------------------------------------------------------------ */
+    @Getter @Setter private String     name;
+    @Getter @Setter private ItemStack  bookmarkedItem;
 
-    @EventHandler
-    protected void checkGui(ChestLoadedEvent event) {
-            BazaarUtils.eventBus.unsubscribe(this);
-    }
+    private static final int SIGN_SLOT_NUMBER = 45;      // slot for the buy-order sign
+    private boolean inCorrectGui        = false;
 
+    /* widget textures (16×16 PNGs inside assets/…/textures/widget/) */
+    private static final Identifier BASE  =
+            Identifier.tryParse(BazaarUtils.MODID, "widget/widget_bookmark_base");
+    private static final Identifier HOVER =
+            Identifier.tryParse(BazaarUtils.MODID, "widget/widget_bookmark_hover");
+
+    public  static final ButtonTextures SLOT_BUTTON_TEXTURES =
+            new ButtonTextures(BASE, HOVER);
+
+    /* ------------------------------------------------------------------ */
+    /*  life-cycle                                                        */
+    /* ------------------------------------------------------------------ */
+
+    /** Construct a new bookmark button for the current GUI. */
     public Bookmark(String name, ItemStack bookmarkedItem) {
-        this.name = name;
-        this.slotNumber = 0;
+        this.name          = name;
+        this.slotNumber    = 0;           // overwritten later by GUI logic
         this.bookmarkedItem = bookmarkedItem;
-        changeVisuals(isBookmarked(this.name));
-        this.replacementItem.set(BazaarUtils.CUSTOM_SIZE_COMPONENT, "★");
-        inCorrectGui = true;
 
+        changeVisuals(isBookmarked(name));
+        this.replacementItem.set(BazaarUtils.CUSTOM_SIZE_COMPONENT, "★");
+
+        this.inCorrectGui = true;
         BazaarUtils.eventBus.subscribe(this);
     }
 
+    /** Unsubscribe as soon as a ChestLoadedEvent fires (GUI finished). */
+    @EventHandler
+    protected void checkGui(ChestLoadedEvent event) {
+        BazaarUtils.eventBus.unsubscribe(this);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Orbit event handlers                                              */
+    /* ------------------------------------------------------------------ */
+
     @EventHandler
     protected void replaceItemEvent(ReplaceItemEvent event) {
-        try {
-            if (!inCorrectGui || !super.shouldReplaceItem(event))
-                return;
+        if (!inCorrectGui || !super.shouldReplaceItem(event))
+            return;
 
-            if (replacementItem == null)
-                changeVisuals(isBookmarked(name));
+        if (replacementItem == null)
+            changeVisuals(isBookmarked(name));
 
-            event.setReplacement(replacementItem);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        event.setReplacement(replacementItem);
     }
 
     @EventHandler
-    private void onBookmarkClick(SlotClickEvent event){
-        if(!inCorrectGui || !super.shouldUseSlot(event))
+    private void onBookmarkClick(SlotClickEvent event) {
+        if (!inCorrectGui || !super.shouldUseSlot(event))
             return;
+
         SoundUtil.playSound(BUTTON_SOUND, BUTTON_VOLUME);
         switchBookmarked();
         bookmarkedItem = findItem(name, event);
         BUConfig.HANDLER.save();
     }
 
-    public void onWidgetLeftClick(){
+    /* ------------------------------------------------------------------ */
+    /*  click behaviour                                                   */
+    /* ------------------------------------------------------------------ */
+
+    /** Normal click: write the item name to the Bazaar search sign. */
+    public void onWidgetLeftClick() {
         SoundUtil.playSound(BUTTON_SOUND, BUTTON_VOLUME);
+
         ModCompatibilityHelper.tryDisableSkyblockerBazaarOverlay();
         GUIUtils.clickSlot(SIGN_SLOT_NUMBER, 0);
         GUIUtils.setSignText(name, true);
         Util.tickExecuteLater(4, ModCompatibilityHelper::tryEnableSkyblockerBazaarOverlay);
     }
 
-    //requires cookie?
-    public void alternateOnWidgetLeftClick(){
+    /** Alt-click (requires cookie): open the item directly. */
+    public void alternateOnWidgetLeftClick() {
         GUIUtils.closeHandledScreen();
         Util.sendCommand("bz " + name);
     }
 
-
-    public void onWidgetShiftClick(){
+    /** Shift-click on the widget itself → delete bookmark. */
+    public void onWidgetShiftClick() {
         BUConfig.get().bookmarks.remove(this);
         BUConfig.HANDLER.save();
     }
 
-    private void switchBookmarked(){
-        if(isBookmarked(name)) {
+    /* ------------------------------------------------------------------ */
+    /*  bookmark management                                               */
+    /* ------------------------------------------------------------------ */
+
+    private void switchBookmarked() {
+        if (isBookmarked(name)) {
             changeVisuals(false);
             BUConfig.get().bookmarks.remove(this);
-        }else {
+        } else {
             changeVisuals(true);
             BUConfig.get().bookmarks.add(this);
         }
         BUConfig.HANDLER.save();
     }
 
-    private void changeVisuals(boolean bookmarked){
-        if(bookmarked) {
+    private void changeVisuals(boolean bookmarked) {
+        if (bookmarked) {
             replacementItem = new ItemStack(Items.GREEN_STAINED_GLASS_PANE, 1);
-            replacementItem.set(DataComponentTypes.CUSTOM_NAME, Text.literal("Remove " + name + " Bookmark"));
+            replacementItem.setStackDisplayName("Remove " + name + " Bookmark");
             replacementItem.set(BazaarUtils.CUSTOM_SIZE_COMPONENT, "⃠ ");
-        }
-        else {
+        } else {
             replacementItem = new ItemStack(Items.RED_STAINED_GLASS_PANE, 1);
-            replacementItem.set(DataComponentTypes.CUSTOM_NAME, Text.literal("Bookmark " + name));
+            replacementItem.setStackDisplayName("Bookmark " + name);
             replacementItem.set(BazaarUtils.CUSTOM_SIZE_COMPONENT, "★");
         }
     }
 
-    public static String findName(ChestLoadedEvent e){
+    /* ------------------------------------------------------------------ */
+    /*  find matching item / name helper                                  */
+    /* ------------------------------------------------------------------ */
+
+    public static String findName(ChestLoadedEvent e) {
         String containerName = GUIUtils.getContainerName();
-        String name = findNameFromContainer();
-        if(containerName.length() > 30){
-            for(ItemStack stack : e.getItemStacks()){
-                if(stack == null) continue;
-                if (!stack.isEmpty() && stack.getName().getString().startsWith(name)) {
-                    //? if >= 1.21.4 {
-                    return stack.getCustomName().getString();
-                    //?} else {
-                    /*return stack.getComponentChanges().get(DataComponentTypes.CUSTOM_NAME).get().getString();
-                    *///?}
+        String name          = findNameFromContainer();
+
+        // Extra check for very long container titles
+        if (containerName.length() > 30) {
+            for (ItemStack stack : e.getItemStacks()) {
+                if (stack == null) continue;
+                if (!stack.isEmpty() &&
+                    stack.getDisplayName().startsWith(name)) {
+                    return stack.getDisplayName(); // 1.8.9 equivalent
                 }
             }
         }
         return name;
     }
 
-    private static String findNameFromContainer(){
+    private static String findNameFromContainer() {
         String containerName = GUIUtils.getContainerName();
-        assert containerName != null;
-        if(BazaarUtils.gui.inInstaBuy()) {
-            return containerName.substring(0, containerName.indexOf("➜")-1);
-        }
-        if(BazaarUtils.gui.inBuyOrderScreen()){
+        if (containerName == null) return "?";
+
+        if (BazaarUtils.gui.inInstaBuy())
+            return containerName.substring(0, containerName.indexOf("➜") - 1);
+
+        if (BazaarUtils.gui.inBuyOrderScreen()) {
             containerName = BazaarUtils.gui.getPreviousScreenName();
-            return containerName.substring(containerName.indexOf("➜")+2);
+            return containerName.substring(containerName.indexOf("➜") + 2);
         }
-        if(BazaarUtils.gui.inAnyItemScreen())
-            return containerName.substring(containerName.indexOf("➜")+2);
+
+        if (BazaarUtils.gui.inAnyItemScreen())
+            return containerName.substring(containerName.indexOf("➜") + 2);
+
         return "?";
     }
 
-
-    private static ItemStack findItem(String name, SlotClickEvent event){
+    private static ItemStack findItem(String name, SlotClickEvent event) {
         ScreenHandler handler = event.handledScreen.getScreenHandler();
 
-        for(Slot slot : handler.slots){
-            ItemStack itemStack = slot.getStack();
-            if(itemStack == null) continue;
-
-            if (!itemStack.isEmpty() && itemStack.getName().getString().startsWith(name)) {
-                return itemStack;
-            }
+        for (Slot slot : handler.slots) {
+            ItemStack stack = slot.getStack();
+            if (stack == null) continue;
+            if (!stack.isEmpty() && stack.getDisplayName().startsWith(name))
+                return stack;
         }
-        for(Slot slot : handler.slots){
-            ItemStack itemStack = slot.getStack();
-
-            if (!itemStack.isEmpty() && itemStack.getName().getString().contains(name)) {
-                return itemStack;
-            }
+        for (Slot slot : handler.slots) {
+            ItemStack stack = slot.getStack();
+            if (!stack.isEmpty() && stack.getDisplayName().contains(name))
+                return stack;
         }
         return null;
     }
 
-    public static boolean isBookmarked(String name){
+    /* ------------------------------------------------------------------ */
+    /*  static helpers                                                    */
+    /* ------------------------------------------------------------------ */
+
+    public static boolean isBookmarked(String name) {
         return findMatchingBookmark(name) != null;
     }
 
-    public static Bookmark findMatchingBookmark(String name){
-        for(Bookmark bookmark : BUConfig.get().bookmarks) {
-            if(bookmark.getName().equalsIgnoreCase(name))
-                return bookmark;
-        }
+    public static Bookmark findMatchingBookmark(String name) {
+        for (Bookmark bm : BUConfig.get().bookmarks)
+            if (bm.getName().equalsIgnoreCase(name))
+                return bm;
         return null;
     }
 
-    public static List<ItemSlotButtonWidget> getWidgets(){
+    /**
+     * Build all widget instances that should be drawn on the current GUI.
+     */
+    public static List<ItemSlotButtonWidget> getWidgets() {
         List<ItemSlotButtonWidget> widgets = new ArrayList<>();
-        String screenTitle = MinecraftClient.getInstance().currentScreen.getTitle().getString();
-        boolean isTargetScreen = screenTitle.startsWith("Bazaar");
 
-       if (!(MinecraftClient.getInstance().currentScreen instanceof AccessorHandledScreen)) {
-    AccessorHandledScreen screen =
-        (AccessorHandledScreen) MinecraftClient.getInstance().currentScreen;
-{
-    AccessorHandledScreen screen =
-        (AccessorHandledScreen) MinecraftClient.getInstance().currentScreen;
-            return Collections.emptyList();
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.currentScreen == null) return widgets;
 
+        String title = mc.currentScreen.getTitle().getString();
+        if (title == null || !title.startsWith("Bazaar")) return widgets;
 
-        ItemSlotButtonWidget.ScreenWidgetDimensions dimensions = ItemSlotButtonWidget.getSafeScreenDimensions(screen, screenTitle);
+        if (!(mc.currentScreen instanceof AccessorHandledScreen screen))
+            return widgets;
 
-            int buttonSize = 18;
-            int spacing = 4;
-            int buttonX = dimensions.x() + dimensions.backgroundWidth() + spacing;
-            int currentButtonY = dimensions.y() + spacing;
+        /* Safe area inside the vanilla container texture */
+        ItemSlotButtonWidget.ScreenWidgetDimensions dims =
+                ItemSlotButtonWidget.getSafeScreenDimensions(screen, title);
 
-            List<Bookmark> bookmarks = BUConfig.get().bookmarks;
+        int size     = 18;
+        int spacing  = 4;
+        int x        = dims.x() + dims.backgroundWidth() + spacing;
+        int y        = dims.y() + spacing;
 
-            for (int i = 0; i < bookmarks.size(); i++) {
-                ItemStack configuredItem = bookmarks.get(i).getBookmarkedItem();
+        for (Bookmark bm : BUConfig.get().bookmarks) {
+            ItemStack icon = (bm.getBookmarkedItem() == null || bm.getBookmarkedItem().isEmpty())
+                    ? new ItemStack(Items.BARRIER)
+                    : bm.getBookmarkedItem();
 
-                final int buttonIndex = i;
-                final ItemStack itemForButton = (configuredItem == null) ? Items.BARRIER.getDefaultStack() : configuredItem;
-                final Bookmark bookmark = bookmarks.get(buttonIndex);
+            ItemSlotButtonWidget btn = new ItemSlotButtonWidget(
+                    x, y, size, size,
+                    SLOT_BUTTON_TEXTURES,
+                    b -> {
+                        if (Screen.hasShiftDown()) {
+                            Util.notifyAll("Removed " + bm.getName() +
+                                           " bookmark (shift-click). " +
+                                           "Open Bazaar again to refresh.");
+                            bm.onWidgetShiftClick();
+                        } else {
+                            bm.onWidgetLeftClick();
+                        }
+                    },
+                    icon,
+                    Text.of(bm.getName()));
 
-                ItemSlotButtonWidget button = new ItemSlotButtonWidget(
-                        buttonX,
-                        currentButtonY,
-                        buttonSize, buttonSize,
-                        SLOT_BUTTON_TEXTURES,
-                        (btn) -> {
-                            if (Screen.hasShiftDown()) {
-                                Util.notifyAll("Removed " + bookmark.getName() + " bookmark from shift-click. Open Bazaar again to display changes.");
-                                bookmark.onWidgetShiftClick();
-                            } else {
-                                bookmark.onWidgetLeftClick();
-                            }
-
-                        },
-                        itemForButton,
-                        Text.of(bookmark.getName())
-                );
-
-                widgets.add(button);
-                currentButtonY += buttonSize + spacing;
-            }
+            widgets.add(btn);
+            y += size + spacing;
+        }
 
         return widgets;
     }
-
 }
