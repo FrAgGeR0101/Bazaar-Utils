@@ -10,178 +10,157 @@ import com.github.mkram17.bazaarutils.utils.GUIUtils;
 import com.github.mkram17.bazaarutils.utils.SoundUtil;
 import com.github.mkram17.bazaarutils.utils.Util;
 import net.minecraft.client.Minecraft;
-import net.minecraft.item.ItemStack;
 import net.minecraft.init.Items;
+import net.minecraft.inventory.Slot;
+import net.minecraft.item.ItemStack;
+import net.minecraft.util.EnumChatFormatting;
 import net.minecraft.util.ResourceLocation;
+
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
- * Vanilla Forge-1.8.9 bookmark button—no Fabric, Lombok, or Orbit.
+ * Simple bookmark button that appears in every Bazaar item GUI.
+ * Pure Forge 1.8.9 (no Fabric, Lombok or modern APIs).
  */
 public final class Bookmark extends CustomItemButton {
 
     /* ------------------------------------------------------------------ */
-    /*  Static data                                                       */
+    /*  Static resources                                                  */
     /* ------------------------------------------------------------------ */
 
-    private static final int SIGN_SLOT_NUMBER = 45;
-
-    /** 16×16 PNGs inside <tt>assets/bazaarutils/textures/widget/</tt> */
     private static final ResourceLocation TEX_BASE  =
-            new ResourceLocation(BazaarUtils.MODID, "textures/widget/widget_bookmark_base.png");
+            new ResourceLocation(BazaarUtils.MODID,
+                                 "textures/widget/widget_bookmark_base.png");
     private static final ResourceLocation TEX_HOVER =
-            new ResourceLocation(BazaarUtils.MODID, "textures/widget/widget_bookmark_hover.png");
-
-    /** Minimal replacement for ButtonTextures (does not exist on 1.8.9). */
-    public static final class ButtonTextures {
-        public final ResourceLocation normal, hover;
-        public ButtonTextures(ResourceLocation n, ResourceLocation h) {
-            this.normal = n; this.hover = h;
-        }
-    }
-    public static final ButtonTextures SLOT_BUTTON_TEXTURES =
-            new ButtonTextures(TEX_BASE, TEX_HOVER);
+            new ResourceLocation(BazaarUtils.MODID,
+                                 "textures/widget/widget_bookmark_hover.png");
 
     /* ------------------------------------------------------------------ */
-    /*  Per-instance data                                                 */
+    /*  Per-instance state                                                */
     /* ------------------------------------------------------------------ */
 
-    private String    name;
-    private ItemStack bookmarkedItem;
-    private boolean   guiActive = false;   // true only while the correct GUI is open
+    private final ItemStack icon;          // icon shown on the cog-bar
+    private String  name;                  // item name being bookmarked
+    private boolean activeGui = false;     // true ← right Bazaar GUI open
 
     /* ------------------------------------------------------------------ */
     /*  Construction                                                      */
     /* ------------------------------------------------------------------ */
 
     public Bookmark(String name, ItemStack icon) {
-        this.name           = name;
-        this.slotNumber     = 0;           // overwritten later by GUI logic
-        this.bookmarkedItem = icon.copy();
-
-        changeVisuals(isBookmarked(name));
-        replacementItem.setStackDisplayName("★");
-
-        guiActive = true;
+        this.name      = name;
+        this.icon      = icon.copy();
+        this.slotNumber = 0;               // assigned later by buildWidgets()
     }
 
     /* ------------------------------------------------------------------ */
-    /*  Public getters                                                    */
+    /*  Replace-item logic                                                */
     /* ------------------------------------------------------------------ */
 
-    public String    getName()           { return name; }
-    public ItemStack getBookmarkedItem() { return bookmarkedItem; }
+    @Override protected boolean shouldReplaceItem(ReplaceItemEvent ev) {
+        if (!activeGui)                       return false;
+        if (ev.getSlotId() != slotNumber)     return false;
 
-    /* ------------------------------------------------------------------ */
-    /*  Replace / click logic (called by GUI helper classes)              */
-    /* ------------------------------------------------------------------ */
-
-    /** Called from {@link ReplaceItemEvent} dispatcher. */
-    @Override
-    protected boolean shouldReplaceItem(ReplaceItemEvent ev) {
-        if (!guiActive)                             return false;
-        if (ev.getSlotId() != slotNumber)           return false;
-
-        changeVisuals(isBookmarked(name));          // refresh
-        ev.setReplacement(replacementItem);
+        ev.setReplacement(getReplacement());
         return true;
     }
 
-    /** Called from {@link SlotClickEvent} dispatcher. */
-    @Override
-    protected boolean shouldUseSlot(SlotClickEvent ev) {
-        return guiActive && ev.slotId == slotNumber;
+    @Override protected boolean shouldUseSlot(SlotClickEvent ev) {
+        return activeGui && ev.getSlotId() == slotNumber;
     }
 
-    /** Toggle bookmark when the invisible glass-pane is clicked. */
-    public void handleSlotClick() {
+    /* handle the (invisible) pane click inside the chest */
+    @Override public void handleSlotClick() {
         SoundUtil.playClick();
         toggleBookmark();
-        BUConfig.HANDLER.save();
+        BUConfig.save();
     }
 
     /* ------------------------------------------------------------------ */
-    /*  Widget interactions                                               */
+    /*  GUI widget clicks                                                 */
     /* ------------------------------------------------------------------ */
 
+    /** Left-click on the cog-bar bookmark button → rename. */
     public void onWidgetLeftClick() {
         SoundUtil.playClick();
-        GUIUtils.clickSlot(SIGN_SLOT_NUMBER, 0);
+        GUIUtils.clickSlot(45, 0);                // open sign
         GUIUtils.setSignText(name, true);
     }
 
+    /** SHIFT-click on the cog-bar bookmark button → delete bookmark. */
     public void onWidgetShiftClick() {
-        BUConfig.get().bookmarks.remove(this);
-        BUConfig.HANDLER.save();
+        BUConfig.get().getBookmarks().remove(this);
+        BUConfig.save();
+        SoundUtil.playClick();
     }
 
     /* ------------------------------------------------------------------ */
-    /*  Bookmark management                                               */
+    /*  Bookmark toggle helpers                                           */
     /* ------------------------------------------------------------------ */
 
     private void toggleBookmark() {
-        if (isBookmarked(name)) {
-            changeVisuals(false);
-            BUConfig.get().bookmarks.remove(this);
+        List<Bookmark> list = BUConfig.get().getBookmarks();
+
+        if (list.contains(this)) {
+            list.remove(this);
+            Util.notifyAll("Removed bookmark: " + name);
         } else {
-            changeVisuals(true);
-            BUConfig.get().bookmarks.add(this);
+            list.add(this);
+            Util.notifyAll("Added bookmark: " + name);
         }
     }
 
-    private void changeVisuals(boolean bookmarked) {
-        if (bookmarked) {
-            replacementItem = new ItemStack(Items.dye, 1, 10);          // green pane in 1.8.9
-            replacementItem.setStackDisplayName("Remove " + name + " Bookmark");
-        } else {
-            replacementItem = new ItemStack(Items.dye, 1, 14);          // red pane
-            replacementItem.setStackDisplayName("Bookmark " + name);
-        }
+    private ItemStack getReplacement() {
+        boolean on = BUConfig.get().getBookmarks().contains(this);
+
+        ItemStack pane = new ItemStack(Items.stained_glass_pane, 1, on ? 10 : 14);
+        pane.setStackDisplayName(
+                (on ? "Remove " : "Bookmark ") + EnumChatFormatting.GOLD + name);
+        return pane;
     }
 
     /* ------------------------------------------------------------------ */
     /*  Static helpers                                                    */
     /* ------------------------------------------------------------------ */
 
-    public static boolean isBookmarked(String n) { return find(n) != null; }
-
-    public static Bookmark find(String n) {
-        for (Bookmark b : BUConfig.get().bookmarks)
-            if (b.name.equalsIgnoreCase(n)) return b;
-        return null;
+    public static boolean exists(String name) {
+        return BUConfig.get().getBookmarks().stream()
+                       .anyMatch(b -> b.name.equalsIgnoreCase(name));
     }
 
-    /** Build all bookmark widgets for the currently open Bazaar GUI. */
+    /** Called every time a Bazaar container opens to build all buttons. */
     public static List<ItemSlotButtonWidget> buildWidgets() {
-        List<ItemSlotButtonWidget> list = new ArrayList<>();
-        if (Minecraft.getMinecraft().currentScreen == null) return list;
-        if (!Util.removeFormatting(Minecraft.getMinecraft()
-                                            .currentScreen.getTitle().getFormattedText())
-                  .startsWith("Bazaar")) return list;
 
-        final int size = 18, pad = 4;
-        int x = 176 + 7;                 // vanilla container width + margin
-        int y = 17 + pad;
+        if (!GUIUtils.inBazaar()) return Collections.emptyList();
 
-        for (Bookmark bm : BUConfig.get().bookmarks) {
+        final int SIZE = 18, PAD = 4;
+        int x = 176 + 7;       // vanilla container width + left margin
+        int y = 17  + PAD;
+
+        List<ItemSlotButtonWidget> out = new ArrayList<>();
+
+        for (Bookmark bm : BUConfig.get().getBookmarks()) {
+
             ItemSlotButtonWidget w = new ItemSlotButtonWidget(
-                    x, y, size, size,
-                    SLOT_BUTTON_TEXTURES,
+                    x, y, SIZE, SIZE,
+                    TEX_BASE, TEX_HOVER,
                     () -> {
-                        if (org.lwjgl.input.Keyboard.isKeyDown(org.lwjgl.input.Keyboard.KEY_LSHIFT))
-                            bm.onWidgetShiftClick();
-                        else
-                            bm.onWidgetLeftClick();
+                        boolean shift = org.lwjgl.input.Keyboard.isKeyDown(
+                                org.lwjgl.input.Keyboard.KEY_LSHIFT);
+                        if (shift) bm.onWidgetShiftClick();
+                        else       bm.onWidgetLeftClick();
                     },
-                    bm.bookmarkedItem.isEmpty()
-                            ? new ItemStack(Items.barrier)
-                            : bm.bookmarkedItem,
+                    bm.icon.stackSize == 0 ? new ItemStack(Items.barrier) : bm.icon,
                     bm.name);
 
-            list.add(w);
-            y += size + pad;
+            /* remember the slot-number inside the bookmark instance */
+            bm.slotNumber = w.getSlotIndex();
+
+            out.add(w);
+            y += SIZE + PAD;
         }
-        return list;
+        return out;
     }
 }
