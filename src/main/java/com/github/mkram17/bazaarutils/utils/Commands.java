@@ -245,7 +245,9 @@ public final class Commands {
         public void processCommand(ICommandSender s, String[] a) {
             StringBuilder sb = new StringBuilder('/').append(target);
             for (String arg : a) sb.append(' ').append(arg);
-            if (s instanceof EntityPlayer p) p.sendChatMessage(sb.toString());
+           if (s instanceof EntityPlayer) {
+    ((EntityPlayer) s).sendChatMessage(sb.toString());
+}
         }
     }
 }
