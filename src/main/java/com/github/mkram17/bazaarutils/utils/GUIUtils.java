@@ -5,293 +5,209 @@ import com.github.mkram17.bazaarutils.events.BUListener;
 import com.github.mkram17.bazaarutils.events.ChestLoadedEvent;
 import com.github.mkram17.bazaarutils.events.SignOpenEvent;
 import com.github.mkram17.bazaarutils.features.Bookmark;
-import com.github.mkram17.bazaarutils.mixin.AccessorSignEditScreen;
-import lombok.Getter;
-import lombok.Setter;
-import meteordevelopment.orbit.EventHandler;
-import meteordevelopment.orbit.EventPriority;
-import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ingame.AbstractSignEditScreen;
-import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.client.gui.screen.ingame.SignEditScreen;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.network.ClientPlayerInteractionManager;
-import net.minecraft.inventory.Inventory;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiEditSign;
+import net.minecraft.client.gui.GuiScreen;
+import net.minecraft.client.gui.inventory.GuiChest;
+import net.minecraft.client.gui.inventory.GuiContainer;
+import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.inventory.Container;
+import net.minecraft.inventory.Slot;
 import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.network.packet.c2s.play.CloseHandledScreenC2SPacket;
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.screen.slot.SlotActionType;
+import net.minecraft.init.Items;
+import net.minecraft.util.ChatComponentText;
+import net.minecraft.util.EnumChatFormatting;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
-import static com.github.mkram17.bazaarutils.BazaarUtils.eventBus;
+/**
+ * Vanilla-only GUI helper used throughout Bazaar-Utils.
+ * <p>No Fabric, no Lombok, no mixins – compatible with Forge 1.8.9.</p>
+ */
+public final class GUIUtils implements BUListener {
 
-//TODO make inBazaar() work all the time
-public class GUIUtils implements BUListener {
-    private static boolean closedScreen = false;
-    public boolean wasLastChestFlip(){
-        return inFlipGui;
-    }
+    /* ───────────────────────────── state ───────────────────────────── */
 
-    public boolean inBuyOrderScreen(){
-        if(getContainerName() == null) return false;
-        return getContainerName().contains("How many do you want?");
-    }
-    public boolean inInstaBuy(){
-        if(getContainerName() == null) return false;
-        return getContainerName().contains("➜ Insta");
-    }
-    public boolean inBuyOrders(){
-        if(getContainerName() == null) return false;
-        return getContainerName().contains("Co-op Bazaar Orders");
-    }
+    private GuiType currentType = GuiType.NONE;
 
-    public boolean inBazaar(){
-        if(getContainerName() == null) return false;
-        return inBuyOrderScreen() || inFlipGui || inInstaBuy() || getContainerName().contains("Bazaar") || inBuyOrders() || getContainerName().contains("➜");
-    }
+    /** Tracks the lower inventory when a chest GUI opens (for flip-menu check). */
+    private Object lowerChestInventory;
 
-    //only for specific items
-    public boolean inAnyItemScreen(){
-        if(getContainerName() == null || getContainerName().contains("Bazaar")) return false;
-        return getContainerName().contains("➜")
-                || inBuyOrderScreen()
-                || inInstaBuy();
-    }
-    private GenericContainerScreen chestScreen;
-    @Getter
-    @Setter
-    private guiTypes guiType;
-    private  List<ItemStack> itemStacks = new ArrayList<>();
-    public boolean inFlipGui;
-    @Getter @Setter
-    private static Inventory lowerChestInventory;
-    @Getter @Setter
+    /** The item-list extracted from the last opened chest GUI. */
+    private final List<ItemStack> itemStacks = new ArrayList<>();
+
+    /** `true` while the player is inside the “flip” options GUI. */
+    private boolean inFlipMenu = false;
+
+    /** Bookmark whose item-button is currently shown (may be <code>null</code>). */
     private Bookmark currentBookmark;
-    @Getter @Setter
-    private String previousScreenName;
+
+    /* ───────────────────────────── enum ────────────────────────────── */
+
+    private enum GuiType { NONE, CHEST, SIGN }
+
+    /* ───────────────────────────── ctor ───────────────────────────── */
+
+    public GUIUtils() {
+        /* listen for game events via the simple Orbit bus */
+        BazaarUtils.EVENT_BUS.subscribe(this);
+    }
+
+    /* ───────────────────────── BUListener impl. ───────────────────── */
 
     @Override
     public void subscribe() {
-        eventBus.subscribe(this);
-        registerScreenEvent();
+        /* already subscribed in the constructor */
     }
 
-    public enum guiTypes {CHEST, SIGN}
+    /* ───────────────────────── chest / sign hooks ─────────────────── */
 
-
-    public static String getContainerName(){
-        var screen = MinecraftClient.getInstance().currentScreen;
-        if(screen != null)
-            return Util.removeFormatting(screen.getTitle().getString());
-        return null;
+    /** Called externally whenever a sign GUI opens. */
+    public void onSignOpen(SignOpenEvent ev) {
+        currentType = GuiType.SIGN;
     }
 
-    public void registerScreenEvent(){
-        ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
-            BazaarUtils.gui = this;
-            lowerChestInventory= null;
-        });
+    /** Called externally whenever a chest GUI finished initialising. */
+    public void onChestLoaded(ChestLoadedEvent ev) {
+        currentType           = GuiType.CHEST;
+        lowerChestInventory   = ev.getLowerChestInventory();
+        itemStacks.clear();
+        itemStacks.addAll(ev.getItemStacks());
 
-        ScreenEvents.BEFORE_INIT.register((client, screen, width, height) -> {
-            BazaarUtils.gui.previousScreenName = BazaarUtils.gui.getContainerName();
-        });
-    }
-    @EventHandler(priority = EventPriority.HIGH)
-    private void loadSign(SignOpenEvent e){
-        guiType = guiType.SIGN;
-    }
+        /* figure out whether this chest is the flip-options menu */
+        inFlipMenu = checkFlipMenu();
 
-    @EventHandler(priority = EventPriority.HIGH)
-    private void onChestLoaded(ChestLoadedEvent e){
-        guiType = guiType.CHEST;
-        itemStacks = e.getItemStacks();
+        /* keep bookmark instance in sync */
         currentBookmark = null;
-
-        if(BazaarUtils.gui.inBuyOrderScreen() || BazaarUtils.gui.inInstaBuy() || BazaarUtils.gui.inAnyItemScreen()){
-            String name = Bookmark.findName(e);
-            if(Bookmark.isBookmarked(name)){
-                currentBookmark = Bookmark.findMatchingBookmark(name);
-                eventBus.subscribe(currentBookmark);
-            } else
-                currentBookmark = new Bookmark(name, Items.BARRIER.getDefaultStack());
+        if (inBuyOrderScreen() || inInstaBuy() || inAnyItemScreen()) {
+            String name = Bookmark.findName(ev);
+            currentBookmark = Bookmark.isBookmarked(name)
+                    ? Bookmark.findMatchingBookmark(name)
+                    : new Bookmark(name, new ItemStack(Items.barrier));
+            if (currentBookmark != null) BazaarUtils.EVENT_BUS.subscribe(currentBookmark);
         }
     }
 
-    //there's some fuck ass recursion happening here from player.closeHandledScreen() and idrk why
-    public static void closeHandledScreen() {
+    /* ───────────────────────────── GUI tests ──────────────────────── */
+
+    public static String containerTitle() {
+        GuiScreen scr = Minecraft.getMinecraft().currentScreen;
+        return (scr != null) ? EnumChatFormatting.getTextWithoutFormattingCodes(scr.getTitle().getFormattedText())
+                             : null;
+    }
+
+    /* “How many do you want?” (classic buy-order amount screen) */
+    public boolean inBuyOrderScreen() {
+        String t = containerTitle();
+        return t != null && t.contains("How many do you want?");
+    }
+
+    /* “➜ Insta...” screen shown right after clicking Insta-Buy */
+    public boolean inInstaBuy() {
+        String t = containerTitle();
+        return t != null && t.contains("➜ Insta");
+    }
+
+    /* Co-op orders list */
+    public boolean inBuyOrders() {
+        String t = containerTitle();
+        return t != null && t.contains("Co-op Bazaar Orders");
+    }
+
+    /** Any Bazaar-related screen? */
+    public boolean inBazaar() {
+        String t = containerTitle();
+        return t != null && (inBuyOrderScreen() || inFlipMenu || inInstaBuy() ||
+                             t.contains("Bazaar") || inBuyOrders() || t.contains("➜"));
+    }
+
+    /** Inside any item-specific GUI? */
+    public boolean inAnyItemScreen() {
+        String t = containerTitle();
+        return t != null && !t.contains("Bazaar") &&
+               (t.contains("➜") || inBuyOrderScreen() || inInstaBuy());
+    }
+
+    /** True while in the flip-options chest GUI. */
+    public boolean inFlipGui() { return inFlipMenu; }
+
+    /* ───────────────────────── flip check helper ──────────────────── */
+
+    private boolean checkFlipMenu() {
+        if (!(Minecraft.getMinecraft().currentScreen instanceof GuiChest)) return false;
+        if (lowerChestInventory == null) return false;
+        String title = containerTitle();
+        if (title == null || !title.contains("Order options")) return false;
+
+        /* slot 13 is the “Confirm” / “Cancel” glass-pane */
         try {
-            Util.notifyAll("Closing gui", Util.notificationTypes.GUI);
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client == null) {
-                Util.notifyError("Client is null", null);
-                return;
-            }
-            if(!(client.currentScreen instanceof HandledScreen<?>))
-                return;
+            // lowerChestInventory = IInventory in vanilla – we avoid the generic type to stay 1.8.9-friendly
+            Object inv = lowerChestInventory;
+            ItemStack stack = (ItemStack) inv.getClass().getMethod("getStackInSlot", int.class).invoke(inv, 13);
 
-
-            client.execute(() -> {
-                ClientPlayerEntity player = client.player;
-                customCloseHandledScreen();
-            });
-        } catch (Exception e) {
-            e.printStackTrace();
-            Util.notifyError("Error closing gui", e);
-        }
+            String name = stack.getDisplayName();
+            return !name.contains("Cancel Order");
+        } catch (Exception ignored) { }
+        return false;
     }
 
-    private static void customCloseHandledScreen() {
-        try {
-            MinecraftClient client = MinecraftClient.getInstance();
-            ClientPlayerEntity player = client.player;
-            if (player == null) {
-                Util.notifyError("Player is null, cannot close screen", null);
-                return;
-            }
-            player.networkHandler.sendPacket(new CloseHandledScreenC2SPacket(player.currentScreenHandler.syncId));
-            client.setScreen(null);
-            player.currentScreenHandler = player.playerScreenHandler;
+    /* ─────────────────────── slot-click helper ────────────────────── */
 
-        } catch (Exception e) {
-            Util.notifyError("Error encountered while closing screen with custom method", e);
-            throw new RuntimeException(e);
-        }
+    public static void clickSlot(int slot, int mouseButton) {
+        Minecraft mc = Minecraft.getMinecraft();
+        EntityPlayer p = mc.thePlayer;
+        if (p == null) return;
+
+        mc.playerController.windowClick(
+                p.openContainer.windowId,
+                slot,
+                mouseButton,
+                0,          // 0 = CLICK, 1 = SHIFT, 2 = HOTBAR
+                p);
     }
 
-    public static void closeSign(){
-        try {
-            Util.notifyAll("Closing sign", Util.notificationTypes.GUI);
-            MinecraftClient mcclient = MinecraftClient.getInstance();
-           if (mcclient != null && mcclient.currentScreen instanceof AbstractSignEditScreen) {
-    AbstractSignEditScreen signEditScreen =
-        (AbstractSignEditScreen) mcclient.currentScreen;
-                mcclient.execute(signEditScreen::close);
-            } else {
-                Util.notifyError("Error closing sign: client was null or not in a sign", null);
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-            Util.notifyError("Unknown error while closing sign", e);
-        }
-    }
-
-
+    /* ─────────────────────── sign-text helper ─────────────────────── */
 
     public static void setSignText(String text, boolean closeAfter) {
-        final int MAX_ATTEMPTS = 5;
-        final long DELAY_MS = 200;
+        GuiScreen scr = Minecraft.getMinecraft().currentScreen;
+        if (!(scr instanceof GuiEditSign)) return;
 
-        CompletableFuture.runAsync(() -> {
-            for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-                MinecraftClient client = MinecraftClient.getInstance();
-                if (client != null && client.currentScreen instanceof SignEditScreen) {
-                    final SignEditScreen screen = (SignEditScreen) client.currentScreen;
-                    client.execute(() -> {
-                        try {
-                            AccessorSignEditScreen signScreen = (AccessorSignEditScreen) screen;
-                            String[] lines = text.split("\n", 4);
-                            int originalRow = signScreen.getCurrentRow();
+        GuiEditSign signGui = (GuiEditSign) scr;
+        try {
+            /* reflect into private fields of GuiEditSign / TileEntitySign */
+            Field tileField = GuiEditSign.class.getDeclaredField("tileSign");
+            tileField.setAccessible(true);
+            Object tileSign = tileField.get(signGui);
 
-                            for (int i = 0; i < 4; i++) {
-                                String line = i < lines.length ? lines[i] : "";
-                                signScreen.setCurrentRow(i);
-                                signScreen.callSetCurrentRowMessage(line);
-                            }
-                            signScreen.setCurrentRow(originalRow);
-                        } catch (Exception e) {
-                            Util.notifyError("Error executing sign text update: " + e.getMessage(), e);
-                            e.printStackTrace();
-                        }
-                    });
-                    if (closeAfter)
-                        closeSign();
-                    return;
-                } else {
-                    if (attempt < MAX_ATTEMPTS - 1) {
-                        try {
-                            Thread.sleep(DELAY_MS);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            MinecraftClient finalClient = MinecraftClient.getInstance();
-                            if (finalClient != null) {
-                                finalClient.execute(() -> Util.notifyError("Sign text setting interrupted", null));
-                            }
-                            return;
-                        }
-                    }
-                }
-            }
+            Field linesF = tileSign.getClass().getDeclaredField("signText");
+            linesF.setAccessible(true);
+            String[] lines = (String[]) linesF.get(tileSign);
 
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client != null) {
-                client.execute(() -> Util.notifyError("Error setting sign text: client was null or not in a sign after " + MAX_ATTEMPTS + " attempts", null));
-            } else {
-                Util.notifyError("Error setting sign text: Failed after " + MAX_ATTEMPTS + " attempts, client was null.", null);
-            }
-        });
-    }
+            String[] newLines = text.split("\n", 4);
+            System.arraycopy(newLines, 0, lines, 0, newLines.length);
 
-    @EventHandler(priority = EventPriority.HIGH)
-    private void onLoad(ChestLoadedEvent e){
-        lowerChestInventory = e.getLowerChestInventory();
-        updateFlipGui();
-    }
-
-    public boolean inFlipGui() {
-        if (getContainerName() == null || lowerChestInventory == null) {
-            return false;
+            if (closeAfter) Minecraft.getMinecraft().displayGuiScreen(null);
+        } catch (Exception e) {
+            Util.notifyError("Failed to set sign text", e);
         }
-
-        if (!getContainerName().contains("Order options")) {
-            return false;
-        }
-
-        ItemStack stack = lowerChestInventory.getStack(13);
-
-        // Check if the item name contains "Cancel Order"
-        String customName = stack.getName().getString();
-        return !customName.contains("Cancel Order");
     }
 
-    public void updateFlipGui(){
-        if(inFlipGui()) {
-            inFlipGui = true;
-            Util.notifyAll("In flip gui", Util.notificationTypes.GUI);
-        }
-        else
-            inFlipGui = false;
+    /* ─────────────────────—— misc public helpers ──────────────────── */
 
+    public Object   getLowerChestInventory()             { return lowerChestInventory; }
+    public List<ItemStack> getItemStacks()                { return Collections.unmodifiableList(itemStacks); }
+    public Bookmark getCurrentBookmark()                  { return currentBookmark; }
+    public GuiType  getCurrentGuiType()                   { return currentType; }
+
+    /* ---------------------------------------------------------------- */
+    /*  tiny debug helper                                               */
+    /* ---------------------------------------------------------------- */
+
+    private static void log(String s) {
+        Minecraft.getMinecraft().thePlayer.addChatMessage(new ChatComponentText(
+                EnumChatFormatting.DARK_GRAY + "[GUIUtils] " + EnumChatFormatting.RESET + s));
     }
-    public static void clickSlot(int slotIndex, int button) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        ClientPlayerInteractionManager interactionManager = client.interactionManager;
-        ClientPlayerEntity player = client.player;
-
-        if (interactionManager == null || player == null) return;
-
-        ScreenHandler screenHandler = player.currentScreenHandler;
-        int syncId = screenHandler.syncId;
-        CompletableFuture.runAsync(() -> {
-            try {
-                Thread.sleep(30);
-                // Use the interaction manager to handle the click
-                interactionManager.clickSlot(
-                        syncId,       // Sync ID of the screen handler
-                        slotIndex,    // Slot index to click
-                        button,       // Mouse button (0 = left, 1 = right)
-                        SlotActionType.PICKUP,   // Slot action type (e.g., PICKUP, QUICK_MOVE)
-                        player        // The player performing the action
-                );
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        });
-    }
-
 }
