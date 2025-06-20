@@ -11,6 +11,30 @@ import java.util.function.Function;
 
 import static com.github.mkram17.bazaarutils.BazaarUtils.EVENT_BUS;
 
+/* ───────────────────── helper stubs for legacy calls ──────────────────── */
+
+/** flip from buy- to sell-side (or vice-versa) and reset progress */
+public void flip(double newUnitPrice) {
+    priceType = priceType.getOpposite();
+    price     = newUnitPrice;
+    amountFilled = 0;
+    status    = Status.SET;
+}
+
+/** legacy static search used by ItemUpdater */
+public static ItemData findItem(ItemData probe, List<ItemData> list) {
+    if (probe == null) return null;
+    for (ItemData d : list)
+        if (d.name.equalsIgnoreCase(probe.name) &&
+            d.priceType == probe.priceType   &&
+            d.volume    == probe.volume)
+            return d;
+    return null;
+}
+
+/** a public array replica that some very old code references */
+public static final Status[] statuses = Status.values();
+
 /**
  * In-memory representation of a single watched Bazaar order / item.
  * Pure 1.8.9 code – no Fabric classes, no Lombok.
