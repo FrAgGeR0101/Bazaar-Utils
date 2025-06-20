@@ -1,172 +1,117 @@
-package com.github.mkram17.bazaarutils.features.restrictsell;
+package com.github.mkram17.bazaarutils.features;
 
 import com.github.mkram17.bazaarutils.BazaarUtils;
+import com.github.mkram17.bazaarutils.config.BUConfig;
 import com.github.mkram17.bazaarutils.events.BUListener;
-import com.github.mkram17.bazaarutils.events.ReplaceItemEvent;
 import com.github.mkram17.bazaarutils.utils.Util;
-import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.item.ItemStack;
-import net.minecraft.text.Text;
+import net.minecraftforge.client.event.ClientChatReceivedEvent;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraft.util.ChatComponentText;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import static com.github.mkram17.bazaarutils.BazaarUtils.eventBus;
-
 /**
- * Prevents accidental bulk-selling via the “Insta-Sell” button.<br>
- * Rules can be based on <b>total price</b>, <b>total volume</b> or
- * specific <b>item-names</b>.  When a rule triggers, the button shows
- * the remaining “safety clicks” that must be performed before the sell
- * goes through.
+ * Filters / shortens Hypixel “stash” reminder messages and
+ * shows a one-time usage hint after the first manual stash claim.
+ *
+ * <p>No Fabric, Lombok or YACL – pure 1.8.9 Forge.</p>
  */
-public final class RestrictSell implements BUListener {
+public final class StashMessages implements BUListener {
 
-    /* ────────────────────────────────────────────────────────── */
-    /*  rule-type                                                */
-    /* ────────────────────────────────────────────────────────── */
+    /* ───────────────────────── config flags ───────────────────────── */
 
-    public enum Rule { PRICE, VOLUME, NAME }
+    private boolean removeMessages;           // main ON/OFF switch
+    private boolean stashPreviouslyClaimed;   // one-time hint shown?
 
-    /* ────────────────────────────────────────────────────────── */
-    /*  config / state                                           */
-    /* ────────────────────────────────────────────────────────── */
+    /* ───────────────────────── internal helpers ───────────────────── */
 
-    private boolean              enabled;
-    private final int            safetyClicksRequired;
-    private final List<RestrictSellControl> controls;
+    /** Rolling window of already-seen chat lines for pattern matching */
+    private final List<String> lastLines = new ArrayList<>(
+            Collections.singleton(""));      // dummy element
 
-    private static final int SELL_BUTTON_SLOT = 47;
+    /** Static fragments that make up the multi-line reminder */
+    private static final String[] PATTERN = {
+            " ",                                          // empty spacer
+            "materials stashed away",
+            "types of material stashed",
+            "to pick them up",
+            "  "                                          // double-space line
+    };
 
-    /* live state while a Bazaar GUI is open */
-    private boolean locked         = false;
-    private int     safetyClicks   = 0;
+    /* ───────────────────────── construction ───────────────────────── */
 
-    /* ────────────────────────────────────────────────────────── */
-    /*  construction                                             */
-    /* ────────────────────────────────────────────────────────── */
-
-    public RestrictSell(boolean on, int clicks, List<RestrictSellControl> rules) {
-        this.enabled               = on;
-        this.safetyClicksRequired  = clicks;
-        this.controls              = (rules == null) ? new ArrayList<>() : rules;
+    public StashMessages(boolean remove) {
+        this.removeMessages        = remove;
+        this.stashPreviouslyClaimed = BUConfig.get().stashMessages.stashPreviouslyClaimed;
     }
 
-    /* ────────────────────────────────────────────────────────── */
-    /*  BUListener                                               */
-    /* ────────────────────────────────────────────────────────── */
+    /* ───────────────────────── BUListener ─────────────────────────── */
 
     @Override
     public void subscribe() {
-        ScreenEvents.AFTER_INIT.register((c,s,w,h) -> safetyClicks = 0);
-        eventBus.subscribe(this);
+        MinecraftForge.EVENT_BUS.register(this);
     }
 
-    /* ────────────────────────────────────────────────────────── */
-    /*  public helpers                                           */
-    /* ────────────────────────────────────────────────────────── */
+    /* ───────────────────────── public toggles ─────────────────────── */
 
-    public boolean isEnabled()               { return enabled; }
-    public void    setEnabled(boolean b)     { enabled = b;    }
-
-    public boolean isSlotLocked(int slotId) {
-        return enabled && locked &&
-               BazaarUtils.gui.inBazaar() &&
-               slotId == SELL_BUTTON_SLOT;
+    public boolean isRemoveMessages()        { return removeMessages; }
+    public void    setRemoveMessages(boolean b) {
+        this.removeMessages = b;
+        BUConfig.HANDLER.save();
     }
 
-    public void addSafetyClick()  { safetyClicks++; }
-    public void resetSafetyClicks(){ safetyClicks  = 0; }
+    /* ───────────────────────── chat hook ──────────────────────────── */
 
-    /* ────────────────────────────────────────────────────────── */
-    /*  core logic                                               */
-    /* ────────────────────────────────────────────────────────── */
+    @SubscribeEvent
+    public void onChat(ClientChatReceivedEvent ev) {
+        String raw = ev.message.getUnformattedText();
 
-    @meteordevelopment.orbit.EventHandler
-    private void onReplaceItem(ReplaceItemEvent ev) {
-        if (!enabled) return;
-        if (ev.getSlotId() != SELL_BUTTON_SLOT)                 return;
-        if (!BazaarUtils.gui.inBazaar())                        return;
-        if (ev.getOriginal() == null)                           return;
-        if (ev.getOriginal().getComponentChanges() == null)     return;
+        /* 1) one-time tip after user claims stash manually */
+        if (raw.contains("You picked up") && raw.contains("from your material stash")) {
+            if (!stashPreviouslyClaimed) {
+                stashPreviouslyClaimed = true;
+                BUConfig.get().stashMessages.stashPreviouslyClaimed = true;
+                BUConfig.HANDLER.save();
 
-        /* Parse the button’s lore                                     */
-        var lore = ev.getOriginal().get(DataComponentTypes.LORE);
-        if (lore == null || lore.lines().size() < 6) return;    // still “Loading …”
-
-        List<Text> lines = lore.lines();
-        int numItems = lines.size() - 8;                        // lore layout (Hypixel)
-
-        List<SellItem> items = extractItems(lines, numItems);
-
-        String coinLine  = lines.get(5 + numItems).getString(); // “Total: 123 coins”
-        double totalCost = Double.parseDouble(
-                coinLine.substring(coinLine.indexOf(": ") + 2,
-                                   coinLine.indexOf(" coins"))
-                        .replace(",", ""));
-
-        locked = isSellLocked(items, totalCost);
-
-        if (locked) {
-            ItemStack repl = ev.getOriginal().copy();
-            if (safetyClicks < safetyClicksRequired) {
-                repl.set(BazaarUtils.CUSTOM_SIZE_COMPONENT,
-                         String.valueOf(safetyClicksRequired - safetyClicks));
+                Util.tickExecuteLater(2, () -> Util.notifyAll(
+                        "TIP – Use " + BazaarUtils.STASH_HELPER.getUsage() +
+                        " to auto-claim stash!  Disable these messages in BU config."));
             }
-            ev.setReplacement(repl);
+            return;                                     // never filtered
+        }
+
+        /* 2) optional auto-removal of the 5-line reminder */
+        if (!removeMessages) return;
+
+        int role = classify(raw);
+        if (role == -1) { lastLines.clear(); return; }  // unrelated message
+
+        /* build rolling window and decide whether to suppress */
+        if (role == lastLines.size()) {
+            lastLines.add(raw);                         // next expected line
+            if (lastLines.size() == PATTERN.length)     // reached the end
+                lastLines.clear();
+            ev.setCanceled(true);                       // hide this line
+        } else {
+            lastLines.clear();                          // pattern broken
+            if (role == 0) lastLines.add(raw);          // maybe new start
         }
     }
 
-    /* Extract list of items (name + volume) from Hypixel lore */
-    private static List<SellItem> extractItems(List<Text> lore, int n) {
-        if (n <= 0) return Collections.emptyList();
+    /* ───────────────────────── helper methods ─────────────────────── */
 
-        List<SellItem> out = new ArrayList<>(n);
-        for (int i = 4; i < 4 + n; i++) {
-            List<Text> comps = lore.get(i).getSiblings();
-            if (comps.size() < 4) {
-                Util.notifyError("RestrictSell: could not parse item row", null);
-                continue;
-            }
-            int    volume = Integer.parseInt(comps.get(1).getString().replace(",", ""));
-            String name   = comps.get(3).getString().trim();
-            out.add(new SellItem(volume, name));
-        }
-        return out;
-    }
-
-    /* ------------------------------------------------------------------ */
-
-    private boolean isSellLocked(List<SellItem> items, double total) {
-
-        /* price-limit rules */
-        for (RestrictSellControl c : controls)
-            if (c.isEnabled() &&
-                c.getRule() == Rule.PRICE &&
-                total > c.getAmount())
-                return true;
-
-        /* per-item checks (volume / name) */
-        for (SellItem si : items) {
-            for (RestrictSellControl c : controls) {
-                if (!c.isEnabled()) continue;
-
-                if (c.getRule() == Rule.VOLUME &&
-                    si.volume > c.getAmount()) return true;
-
-                if (c.getRule() == Rule.NAME   &&
-                    si.name.equalsIgnoreCase(c.getName())) return true;
+    /** Identify which PATTERN fragment the line belongs to (-1 = none). */
+    private static int classify(String s) {
+        for (int i = 0; i < PATTERN.length; i++) {
+            if (PATTERN[i].trim().isEmpty()) {
+                if (s.trim().isEmpty()) return i;
+            } else if (s.contains(PATTERN[i])) {
+                return i;
             }
         }
-        return false;
+        return -1;
     }
-
-    /* ────────────────────────────────────────────────────────── */
-    /*  small record helper                                       */
-    /* ────────────────────────────────────────────────────────── */
-
-    /** A single line (“ 123 × Enchanted Diamond ”) in the sell-GUI. */
-    private record SellItem(int volume, String name) {}
 }
