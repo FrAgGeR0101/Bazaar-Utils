@@ -2,198 +2,147 @@ package com.github.mkram17.bazaarutils.features.restrictsell;
 
 import com.github.mkram17.bazaarutils.BazaarUtils;
 import com.github.mkram17.bazaarutils.events.BUListener;
+import com.github.mkram17.bazaarutils.events.ChestLoadedEvent;
 import com.github.mkram17.bazaarutils.events.ReplaceItemEvent;
-import com.github.mkram17.bazaarutils.config.BUConfig;
 import com.github.mkram17.bazaarutils.utils.Util;
-import dev.isxander.yacl3.api.Option;
-import dev.isxander.yacl3.api.OptionDescription;
-import dev.isxander.yacl3.api.OptionGroup;
-import lombok.Getter;
-import lombok.Setter;
-import meteordevelopment.orbit.EventHandler;
-import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
-import net.minecraft.component.DataComponentTypes;
+import net.minecraft.init.Blocks;
 import net.minecraft.item.ItemStack;
-import net.minecraft.text.Text;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.util.ChatComponentText;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
-import static com.github.mkram17.bazaarutils.BazaarUtils.eventBus;
+import static com.github.mkram17.bazaarutils.BazaarUtils.EVENT_BUS;
 
-//TODO maybe color chest if it is locked
-public class RestrictSell implements BUListener {
-    public enum restrictBy{PRICE, VOLUME, NAME}
-    @Getter @Setter
-    private boolean enabled;
-    private int safetyClicksRequired;
-    @Getter @Setter
-    private ArrayList<RestrictSellControl> controls;
-    private static int SELL_ITEM_SLOT_ID = 47;
-    private boolean locked = false;
-    @Getter
-    private int safetyClicks = 0;
+/**
+ * Forge-1 .8 .9 implementation of the “Restrict Sell” helper.
+ * <br>– No Fabric, Lombok, Orbit, YACL, or Text API – everything is
+ * plain vanilla-MC classes, so it compiles on any 1 .8 .9 tool-chain.
+ */
+public final class RestrictSell implements BUListener {
 
-    public void addSafetyClick(){
-        safetyClicks++;
-    }
-    public void resetSafetyClicks(){
-        safetyClicks = 0;
+    /* ──────────────────────────────────── rule types ──────────────────────────────────── */
+    public enum Rule { PRICE, VOLUME, NAME }
+
+    /* ───────────────────────────────────── state ─────────────────────────────────────── */
+    private boolean enabled               = true;
+    private int     safetyClicksRequired  = 3;
+
+    private final List<RestrictSellControl> rules = new ArrayList<>();
+    private int  safetyClicks = 0;
+    private boolean locked    = false;                 // true ⇒ slot-47 replaced
+
+    private static final int SELL_SLOT = 47;           // Hypixel insta-sell slot-id
+
+    /* ───────────────────────────────── constructors ──────────────────────────────────── */
+    public RestrictSell() { /* defaults ok */ }
+
+    /* ───────────────────────────────── public API ────────────────────────────────────── */
+    public void addPriceRule (double maxPrice)        { rules.add(new RestrictSellControl(Rule.PRICE , maxPrice)); }
+    public void addVolumeRule(double maxVolume)       { rules.add(new RestrictSellControl(Rule.VOLUME, maxVolume));}
+    public void addNameRule  (String itemName)        { rules.add(new RestrictSellControl(itemName));             }
+
+    /* ───────────────────────────── BUListener hook ──────────────────────────────────── */
+    @Override public void subscribe() {
+        EVENT_BUS.subscribe(this);
+        EVENT_BUS.subscribe((ChestLoadedEvent ev) -> safetyClicks = 0); // reset per GUI
     }
 
-    public RestrictSell(boolean enabled, int safetyClicksRequired, ArrayList<RestrictSellControl> controls) {
-        this.enabled = enabled;
-        this.safetyClicksRequired = safetyClicksRequired;
-        this.controls = controls;
-    }
-    private void registerScreenEvent() {
-        ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
+    /* ───────────────────────── ReplaceItemEvent handler ─────────────────────────────── */
+    @SuppressWarnings("unused") // called via functional-interface subscription
+    public void onReplaceItem(final ReplaceItemEvent ev) {
+
+        if (!enabled)                           return;
+        if (ev.getSlotId() != SELL_SLOT)        return;
+        if (!BazaarUtils.GUI.inBazaar())        return;
+
+        ItemStack original = ev.getOriginal();
+        if (original == null || !original.hasTagCompound()) return;
+
+        ParsedSellData sd = parseLore(original.getTagCompound());
+        if (sd == null) return;                 // malformed lore
+
+        locked = violatesAnyRule(sd);
+        if (!locked) return;                    // no rule hit → vanilla button
+
+        /*  ============  slot is blocked  ============ */
+        ItemStack block = new ItemStack(Blocks.stained_glass_pane, 1, 14); // red pane
+        int left = safetyClicksRequired - safetyClicks;
+        block.setStackDisplayName("§cSELL BLOCKED §7(" + left + " clicks)");
+        ev.setReplacement(block);
+
+        if (++safetyClicks >= safetyClicksRequired) {
+            // user confirmed – allow one sell and reset
+            enabled      = false;  // disable until next GUI open
             safetyClicks = 0;
-        });
+        }
+
+        warnUser(sd, left);
     }
 
-    @EventHandler
-    private void onGUI(ReplaceItemEvent e){
-        try {
-            if (e.getSlotId() != SELL_ITEM_SLOT_ID || !BazaarUtils.gui.inBazaar())
-                return;
-            if (e.getOriginal() == null || e.getOriginal().getComponentChanges().get(DataComponentTypes.LORE) == null)
-                return;
-            if (e.getOriginal().getComponentChanges().get(DataComponentTypes.LORE).get().styledLines().size() < 6 || e.getOriginal().getComponentChanges().get(DataComponentTypes.LORE).get().styledLines().get(4).getString().contains("Loading"))
-                return;
+    /* ───────────────────────────── parsing helpers ──────────────────────────────────── */
+    private static class ParsedSellData {
+        double totalPrice;
+        final List<Stack> stacks = new ArrayList<>();
+    }
+    private record Stack(int volume, String name) {}
 
-            ItemStack sellButton = e.getOriginal().copy();
-            List<Text> changedComponents = sellButton.getComponentChanges().get(DataComponentTypes.LORE).get().styledLines();
-            int numItems = changedComponents.size()-8;
-            ArrayList<SellItem> items = getItems(changedComponents, numItems);
-            String coinsText = changedComponents.get(5 + numItems).getString();
-            double totalPrice = Double.parseDouble(coinsText.substring(coinsText.indexOf(": ") + 2, coinsText.indexOf(" coins")).replace(",", ""));
+    private ParsedSellData parseLore(NBTTagCompound root) {
 
+        if (!root.hasKey("display")) return null;
+        NBTTagCompound disp = root.getCompoundTag("display");
+        if (!disp.hasKey("Lore"))    return null;
 
-            locked = isInstaSellLocked(items, totalPrice);
-            if(locked){
-                sellButton = e.getOriginal().copy();
-                if(safetyClicksRequired != safetyClicks)
-                    sellButton.set(BazaarUtils.CUSTOM_SIZE_COMPONENT, String.valueOf(safetyClicksRequired-safetyClicks));
+        ParsedSellData out = new ParsedSellData();
+
+        for (int i = 0; i < disp.getTagList("Lore", 8).tagCount(); i++) { // 8 = String
+            String s = disp.getTagList("Lore", 8).getStringTagAt(i).replace("§", "");
+
+            if (s.startsWith("Price: ")) {
+                String num = s.substring(7, s.indexOf(" coins")).replace(",", "");
+                out.totalPrice = Double.parseDouble(num);
+            }
+            if (s.contains("x ")) {                                       // “ 128x Cobblestone”
+                int vol  = Integer.parseInt(s.substring(0, s.indexOf('x')).trim());
+                String nm = s.substring(s.indexOf('x') + 2).trim();
+                out.stacks.add(new Stack(vol, nm));
+            }
+        }
+        return out;
+    }
+
+    /* ───────────────────────────── rule evaluation ──────────────────────────────────── */
+    private boolean violatesAnyRule(ParsedSellData d) {
+
+        for (RestrictSellControl r : rules) {
+            if (!r.isEnabled()) continue;
+
+            switch (r.getRule()) {
+                case PRICE  -> { if (d.totalPrice > r.getAmount()) return true; }
+                case VOLUME -> {
+                    for (Stack s : d.stacks)
+                        if (s.volume() > r.getAmount()) return true;
                 }
-            e.setReplacement(sellButton);
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        }
-    }
-    public ArrayList<SellItem> getItems(List<Text> changedComponents, int numItems){
-        ArrayList<SellItem> items = new ArrayList<>();
-
-        for(int i = 4; i<4+numItems; i++){
-            var components = changedComponents.get(i).getSiblings();
-            int volume = Integer.parseInt(components.get(1).getString().replace(",", ""));
-
-            if(components.size() > 2) {
-                String name = components.get(3).getString().trim();
-                SellItem newItem = new SellItem(volume, name);
-                items.add(newItem);
-            }else{
-                Util.notifyError("Not enough components to find item name. Size: " + components.size(), new Throwable("Restrict Sell Error"));
-            }
-        }
-        return items;
-    }
-
-    public boolean isSlotLocked(int slotId){
-        return BazaarUtils.gui.inBazaar() && slotId == SELL_ITEM_SLOT_ID && locked;
-    }
-
-    private boolean isInstaSellLocked(ArrayList<SellItem> items, double totalPrice){
-        for(RestrictSellControl control : controls){
-            if(control.isEnabled()) {
-                if (control.getRule() == restrictBy.PRICE && totalPrice > control.getAmount())
-                    return true;
-            }
-        }
-        for(SellItem item : items){
-            if(isItemRestricted(item.getVolume(), item.getName()))
-                return true;
-        }
-        return false;
-    }
-
-    private boolean isItemRestricted(int volume, String name){
-        for(RestrictSellControl control : controls){
-            if(control.isEnabled()) {
-                if (control.getRule() == restrictBy.VOLUME && volume > control.getAmount())
-                    return true;
-                else if (control.getRule() == restrictBy.NAME && name.equalsIgnoreCase(control.getName()))
-                    return true;
+                case NAME   -> {
+                    for (Stack s : d.stacks)
+                        if (s.name().equalsIgnoreCase(r.getName())) return true;
+                }
             }
         }
         return false;
     }
-    public void addRule(restrictBy newRule, double limit){
-        controls.add(new RestrictSellControl(newRule, limit));
-    }
-    public void addRule(restrictBy newRule, String name){
-        controls.add(new RestrictSellControl(newRule, name));
-    }
 
-    public String getMessage(){
-        String message = "Sell protected by rules:";
-        for(RestrictSellControl control : controls) {
-            if(!control.isEnabled())
-                continue;
-            if (control.getRule() == restrictBy.PRICE)
-                message += " PRICE: ";
-            else if(control.getRule() == restrictBy.VOLUME)
-                message += " VOLUME: ";
-            else {
-                message += " NAME: ";
-                message += control.getName();
-                continue;
-            }
-            message += control.getAmount();
-        }
-        message += " (Safety Clicks Left: " + (3-safetyClicks) + ")";
-        return message;
-    }
+    /* ───────────────────────────── user feedback ───────────────────────────────────── */
+    private static void warnUser(ParsedSellData d, int left) {
+        StringBuilder msg = new StringBuilder("§eSell blocked");
+        msg.append(" – ").append(left).append(" click");
+        if (left != 1) msg.append('s');
+        msg.append(" to confirm.  (Total ").append(Util.pretty(d.totalPrice)).append(" coins)");
 
-    public Option<Boolean> createRuleOption(RestrictSellControl control) {
-        // Determine display text based on rule type
-        Text nameText;
-        Text descriptionText;
-
-        if (control.getRule() == restrictBy.NAME) {
-            String itemName = control.getName(); // Assuming getName() exists for NAME rules
-            nameText = Text.literal("Item: " + itemName);
-            descriptionText = Text.literal("Block insta-sell for item: " + itemName);
-        } else {
-            double amount = control.getAmount();
-            String typeText = control.getRule() == restrictBy.VOLUME ? "Volume < " : "Price < ";
-            nameText = Text.literal(typeText + amount);
-            String desc = control.getRule() == restrictBy.PRICE ?
-                    "Block insta-sell if price exceeds " + amount :
-                    "Block insta-sell if volume exceeds " + amount;
-            descriptionText = Text.literal(desc);
-        }
-
-        return Option.<Boolean>createBuilder()
-                .name(nameText)
-                .description(OptionDescription.of(descriptionText))
-                .binding(
-                        false,
-                        control::isEnabled,
-                        control::setEnabled
-                )
-                .controller(BUConfig::createBooleanController)
-                .build();
-    }
-
-    public void buildOptions(OptionGroup.Builder builder){
-        for(RestrictSellControl control : getControls()){
-            builder.option(createRuleOption(control));
-        }
-    }
-    @Override
-    public void subscribe() {
-        registerScreenEvent();
-        eventBus.subscribe(this);
+        if (net.minecraft.client.Minecraft.getMinecraft().thePlayer != null)
+            net.minecraft.client.Minecraft.getMinecraft()
+                    .thePlayer.addChatMessage(new ChatComponentText(msg.toString()));
     }
 }
