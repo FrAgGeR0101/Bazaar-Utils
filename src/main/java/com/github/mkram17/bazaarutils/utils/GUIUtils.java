@@ -6,7 +6,7 @@ import com.github.mkram17.bazaarutils.events.ChestLoadedEvent;
 import com.github.mkram17.bazaarutils.events.SignOpenEvent;
 import com.github.mkram17.bazaarutils.features.Bookmark;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiEditSign;
+import net.minecraft.client.gui.inventory.GuiEditSign;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.inventory.GuiChest;
 import net.minecraft.client.gui.inventory.GuiContainer;
