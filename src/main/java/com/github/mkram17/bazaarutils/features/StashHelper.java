@@ -1,68 +1,59 @@
 package com.github.mkram17.bazaarutils.features;
 
+import com.github.mkram17.bazaarutils.BazaarUtils;
+import com.github.mkram17.bazaarutils.events.BUListener;
 import com.github.mkram17.bazaarutils.utils.GUIUtils;
 import com.github.mkram17.bazaarutils.utils.Util;
-import com.github.mkram17.bazaarutils.events.BUListener;
-import net.minecraftforge.fml.common.gameevent.TickEvent;
-import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
-import net.minecraftforge.fml.client.registry.ClientRegistry;
 import net.minecraft.client.settings.KeyBinding;
-import net.minecraft.client.Minecraft;
+import net.minecraftforge.client.event.InputUpdateEvent;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.fml.client.registry.ClientRegistry;
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.fml.common.gameevent.TickEvent;
 import org.lwjgl.input.Keyboard;
 
 /**
- * Simple “/pickupstash” helper:
- * <ul>
- *   <li>ALT&nbsp;+&nbsp;V by default</li>
- *   <li>Debounced – needs at least 10 client-ticks between key-presses</li>
- *   <li>Closes the current GUI, then runs the command</li>
- * </ul>
- *
- * <p>No Fabric, no Amecs – plain Forge 1.8.9 key-binding and tick-event.</p>
+ * ALT+V helper that closes the current GUI and runs “/pickupstash”.
+ * <p>Pure Forge 1.8.9 – no Amecs or Fabric APIs.</p>
  */
 public final class StashHelper implements BUListener {
 
-    /* ------------------------------------------------------------ */
-    /*  key binding                                                 */
-    /* ------------------------------------------------------------ */
+    /* ───────────────────────── key-binding ───────────────────────── */
+    private static final KeyBinding KEY = new KeyBinding(
+            "key.bu.pickupstash",            // localisation key
+            Keyboard.KEY_V,                  // default
+            "Bazaar-Utils");                 // category
 
-    private static final KeyBinding KEY =
-            new KeyBinding("key.bu.pickupstash",
-                           Keyboard.KEY_V,
-                           "Bazaar-Utils");
-
-    /* modifier: hold either left- or right-ALT together with V      */
     private static boolean altHeld() {
         return Keyboard.isKeyDown(Keyboard.KEY_LMENU) ||
                Keyboard.isKeyDown(Keyboard.KEY_RMENU);
     }
 
-    /* ------------------------------------------------------------ */
-    /*  debounce state                                              */
-    /* ------------------------------------------------------------ */
+    /* ───────────────────────── debounce ──────────────────────────── */
+    private int ticksSinceLastPress = 20;    // “ready” at start
 
-    private int ticksSinceLastPress = 20;   // start “ready”
-
-    /* ------------------------------------------------------------ */
-    /*  lifecycle                                                   */
-    /* ------------------------------------------------------------ */
-
+    /* ───────────────────────── ctor / install ────────────────────── */
     public StashHelper() {
         ClientRegistry.registerKeyBinding(KEY);
     }
 
-    @Override
-    public void subscribe() {
-        /* Orbit already registered in BazaarUtils */
-        com.github.mkram17.bazaarutils.BazaarUtils.EVENT_BUS.subscribe(this);
+    /** Modern entry-point used by fresh code. */
+    public void registerTickCounter() {
+        MinecraftForge.EVENT_BUS.register(this);
     }
 
-    /* ------------------------------------------------------------ */
-    /*  tick handler                                                */
-    /* ------------------------------------------------------------ */
+    /** Legacy alias kept for older source files. */
+    public void startTickCounter() {
+        registerTickCounter();               // delegate
+    }
 
+    @Override public void subscribe() {
+        // also subscribe to the lightweight Orbit bus, if needed
+        BazaarUtils.EVENT_BUS.subscribe(this);
+    }
+
+    /* ───────────────────────── tick handler ──────────────────────── */
     @SubscribeEvent
-    @SuppressWarnings("unused")
     public void onClientTick(TickEvent.ClientTickEvent ev) {
         if (ev.phase != TickEvent.Phase.END) return;
 
@@ -70,15 +61,12 @@ public final class StashHelper implements BUListener {
 
         if (KEY.isKeyDown() && altHeld() && ticksSinceLastPress > 10) {
             ticksSinceLastPress = 0;
-            GUIUtils.closeHandledScreen();
-            Util.sendCommand("pickupstash");
+            GUIUtils.closeHandledScreen();      // safely dismiss any GUI
+            Util.sendCommand("pickupstash");    // run the command
         }
     }
 
-    /* ------------------------------------------------------------ */
-    /*  small helper shown in settings-GUI (optional)               */
-    /* ------------------------------------------------------------ */
-
+    /* ───────────────────────── small helper ──────────────────────── */
     public String getUsage() {
         return "ALT + " + Keyboard.getKeyName(KEY.getKeyCode());
     }
