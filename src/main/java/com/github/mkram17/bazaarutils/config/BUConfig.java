@@ -8,102 +8,98 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.minecraft.client.gui.GuiScreen;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;                     // ← Java-8 compatible
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Tiny JSON-backed config scaffolding – **only what the rest of the
- * 1.8.9 code base needs to compile and run**.
- */
+/** ultra-light JSON config – only what the rest of 1 .8 .9 needs */
 public final class BUConfig {
 
-    /* ─────────────────────────── persistence ─────────────────────────── */
-
-    private static final Path FILE = Path.of("config", "bazaarutils.json");
+    /* ───────────────── persistence ───────────────── */
+    private static final Path FILE = Paths.get("config", "bazaarutils.json");
     private static final Gson GSON = new GsonBuilder()
             .setPrettyPrinting()
             .disableHtmlEscaping()
             .create();
 
-    /* ─────────────────────────── serialised fields ───────────────────── */
+    /* ───────────────── serialised data ───────────── */
+    public List<Bookmark>    bookmarks      = new ArrayList<>();
+    public List<CustomOrder> customOrders   = new ArrayList<>();
+    public List<ItemData>    watchedItems   = new ArrayList<>();
 
-    /*  PUBLIC so Gson can fill them – code also accesses them directly   */
-    public List<Bookmark>    bookmarks     = new ArrayList<>();
-    public List<CustomOrder> customOrders  = new ArrayList<>();
-    public List<ItemData>    watchedItems  = new ArrayList<>();
-
-    public StashMessages  stashMessages = new StashMessages(false);
-    public RestrictSell   restrictSell  = new RestrictSell(true, 3, new ArrayList<>());
+    public StashMessages stashMessages   = new StashMessages(false);
+    public RestrictSell  restrictSell    = new RestrictSell();      // ← no-arg ctor
 
     public List<BUListener> serializedEvents = new ArrayList<>();
 
     /* simple scalars */
-    private double  bzTax         = 0.01;      // 1 %
-    private boolean developerMode = false;
+    private double  bzTax            = 0.01;   // 1 %
+    private boolean developerMode    = false;
+    private boolean removeStashMsgs  = false;
+    private boolean stashTipShown    = false;
 
-    /* ─────────────────────────── singleton plumbing ──────────────────── */
-
+    /* ───────────────── singleton ─────────────────── */
     private static BUConfig INSTANCE = new BUConfig();
     public  static BUConfig get() { return INSTANCE; }
 
-    /* ─────────────────────────── JSON helpers ────────────────────────── */
-
+    /* ───────────────── JSON I/O ───────────────────── */
     public static void load() {
         try {
             if (Files.notExists(FILE)) { save(); return; }
-            String json = Files.readString(FILE);
+            String json = new String(Files.readAllBytes(FILE), StandardCharsets.UTF_8);
             BUConfig cfg = GSON.fromJson(json, BUConfig.class);
             if (cfg != null) INSTANCE = cfg;
         } catch (Exception e) {
-            System.err.println("[Bazaar-Utils] Bad config – using defaults: " + e);
+            System.err.println("[Bazaar-Utils] bad config → defaults ("+e+")");
         }
     }
-
     public static void save() { HANDLER.save(); }
 
-    /* legacy alias used all over the code base */
+    /* legacy alias */
     public static final class ConfigHandler {
         public void save() {
             try {
                 Files.createDirectories(FILE.getParent());
-                Files.writeString(FILE, GSON.toJson(INSTANCE));
+                Files.write(FILE, GSON.toJson(INSTANCE).getBytes(StandardCharsets.UTF_8));
             } catch (Exception e) {
-                System.err.println("[Bazaar-Utils] Couldn’t write config: " + e);
+                System.err.println("[Bazaar-Utils] cannot write config ("+e+")");
             }
         }
-        public void load() { /* unused – BUConfig.load() is called */ }
+        public void load() {}   // unused
     }
     public static final ConfigHandler HANDLER = new ConfigHandler();
 
-    /* ─────────────────────────── getters / setters ───────────────────── */
+    /* ───────── getters / setters needed elsewhere ───────── */
 
     /* lists */
-    public List<Bookmark>      getBookmarks()     { return bookmarks;    }
-    public List<CustomOrder>   getCustomOrders()  { return customOrders; }
-    public List<ItemData>      getWatchedItems()  { return watchedItems; }
+    public List<Bookmark>      getBookmarks()       { return bookmarks;    }
+    public List<CustomOrder>   getCustomOrders()    { return customOrders; }
+    public List<ItemData>      getWatchedItems()    { return watchedItems; }
+    public List<BUListener>    getSerializedEvents(){ return serializedEvents; }
 
-    public List<BUListener>    getSerializedEvents() { return serializedEvents; }
+    /* simple scalars */
+    public double  getBzTax()                 { return bzTax; }
+    public void    setBzTax(double v)         { bzTax = v;    }
 
-    /* scalars */
-    public double  getBzTax()                    { return bzTax; }
-    public void    setBzTax(double v)            { bzTax = v;    }
+    public boolean isDeveloperMode()          { return developerMode; }
+    public void    setDeveloperMode(boolean v){ developerMode = v;    }
 
-    public boolean isDeveloperMode()             { return developerMode; }
-    public void    setDeveloperMode(boolean v)   { developerMode = v;    }
+    /* stash-message helpers used by StashMessages */
+    public boolean isRemoveStashMessages()    { return removeStashMsgs; }
+    public void    setRemoveStashMessages(boolean v){ removeStashMsgs = v; }
 
-    public StashMessages getStashMessages()      { return stashMessages; }
-    public RestrictSell  getRestrictSell()       { return restrictSell;  }
+    public boolean isStashTipShown()          { return stashTipShown; }
+    public void    setStashTipShown(boolean v){ stashTipShown = v; }
 
-    /* ─────────────────────────── tiny stubs used by GUI code ─────────── */
+    public StashMessages getStashMessages()   { return stashMessages; }
+    public RestrictSell  getRestrictSell()    { return restrictSell;  }
 
-    /** YACL-style GUI factory placeholder – simply returns the parent. */
-    public GuiScreen createGUI(GuiScreen parent) { return parent; }
+    /* GUI / option stubs (keep the compiler happy) */
+    public GuiScreen createGUI(GuiScreen parent){ return parent; }
+    public static Object createBooleanController(){ return null; }
 
-    /** Boolean-option controller stub (YACL replacement). */
-    public static Object createBooleanController() { return null; }
-
-    /* hide ctor */
     private BUConfig() {}
 }
