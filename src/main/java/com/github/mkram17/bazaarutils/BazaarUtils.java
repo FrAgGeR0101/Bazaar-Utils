@@ -18,8 +18,7 @@ import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import java.util.ArrayList;
 import java.util.List;
 
-public static final net.minecraftforge.common.MinecraftForge EVENT_BUS
-        = net.minecraftforge.common.MinecraftForge.EVENT_BUS;
+
 
 /**
  * Forge-1.8.9 entry-point for Bazaar-Utils.
@@ -36,6 +35,9 @@ public final class BazaarUtils {
        Public constants / singletons
        ───────────────────────────────────────────────────────── */
     public static final String MODID = "bazaarutils";
+        
+        public static final net.minecraftforge.common.MinecraftForge EVENT_BUS
+        = net.minecraftforge.common.MinecraftForge.EVENT_BUS;
 
     /** Lightweight GUI helper used by most features. */
     public static final GUIUtils GUI = new GUIUtils();
