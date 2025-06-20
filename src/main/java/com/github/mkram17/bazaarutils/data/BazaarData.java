@@ -2,174 +2,136 @@ package com.github.mkram17.bazaarutils.data;
 
 import com.github.mkram17.bazaarutils.BazaarUtils;
 import com.github.mkram17.bazaarutils.config.BUConfig;
-import com.github.mkram17.bazaarutils.events.BUListener;
 import com.github.mkram17.bazaarutils.misc.ItemData;
 import com.github.mkram17.bazaarutils.utils.Util;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.hypixel.api.reply.skyblock.SkyBlockBazaarReply;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.resource.Resource;
-import net.minecraft.resource.ResourceManager;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.resources.IResource;
+import net.minecraft.client.resources.IResourceManager;
+import net.minecraft.util.ResourceLocation;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-//TODO more efficient timing of api requests
-public class BazaarData implements BUListener {
-    private static final String PRODUCT_NAME_RESOURCE = "bazaar-resources.json";
-    static ScheduledExecutorService bzExecutor = Executors.newScheduledThreadPool(5);
-    private static SkyBlockBazaarReply bazaarReply = null;
-    private static int bazaarDataPeriod = 1;
-    private static int exceptionCount = 0;
-    private static int bazaarCalls = 0;
+/**
+ * Periodically fetches Hypixel Bazaar data (via the Hypixel-Java API) and
+ * offers a few static helper-methods for price-look-ups and product-ID
+ * conversions.  All Fabric-only classes have been replaced by their
+ * 1.8.9 Forge counterparts (<em>Minecraft</em>, <em>IResourceManager</em>,
+ * <em>ResourceLocation</em> …).
+ */
+public final class BazaarData {
+
+    /* ────────────────────────────────────────────────────────── */
+    private static final String RESOURCE_JSON = "bazaar-resources.json";
+
+    private static final ScheduledExecutorService EXEC =
+            Executors.newSingleThreadScheduledExecutor();
+
+    private static SkyBlockBazaarReply reply;          // most-recent API payload
+    private static int  callCounter     = 0;           // API call statistics
+    private static int  exceptionCount  = 0;
+    private static int  periodSeconds   = 1;
     private static boolean skipNextCall = false;
-    private static final long bazaarDataDelay = 3L;
 
-    @Override
-    public void subscribe(){
-        scheduleBazaar();
+    /* ────────────────────────────────────────────────────────── */
+
+    private BazaarData() {}           // static-only utility
+
+    /* ────────────────────────────────────────────────────────── */
+    /*  public API                                               */
+    /* ────────────────────────────────────────────────────────── */
+
+    public static void startScheduler() {
+        EXEC.scheduleAtFixedRate(BazaarData::fetchBazaar,
+                                 3,       // initial delay
+                                 1,       // tick every second
+                                 TimeUnit.SECONDS);
     }
 
-    public static void scheduleBazaar(){
+    /** Current best buy / sell price (or –1 when unavailable). */
+    public static double findItemPrice(String productId, ItemData.PriceType type) {
 
-        bzExecutor.scheduleAtFixedRate(() -> {
-            if(!(bazaarCalls % bazaarDataPeriod == 0))
-                return;
-            if(skipNextCall) {
-                skipNextCall = false;
-                return;
-            }
-
-            APIUtils.API.getSkyBlockBazaar().whenComplete((reply, throwable) -> {
-                    bazaarCalls++;
-                    if(bazaarCalls % 10 == 0 || bazaarCalls < 5)
-                        skipNextCall = true;
-
-                    if (throwable != null) {
-                        skipNextCall = true;
-                        exceptionCount++;
-                        Util.notifyError("Exception thrown trying to get bazaar data", throwable);
-                        System.out.println("[Bazaar Utils] Error info: period-" + bazaarDataPeriod + ", exceptionCount-" + exceptionCount);
-                        System.out.println("[Bazaar Utils] Status: " + APIUtils.API.getStatus(APIUtils.uuid));
-                        if(exceptionCount % 5 == 0){
-                            bazaarDataPeriod++;
-                        }
-                    } else {
-                        if(reply == null){
-                            Util.notifyError("Bazaar data is null", null);
-                            return;
-                        }
-                        bazaarReply = reply;
-//                        writeJsonToFile(jsonString);
-
-                        if (!BUConfig.get().watchedItems.isEmpty()) {
-                            ItemData.update();
-                        }
-                    }
-                });
-        }, bazaarDataDelay, 1, TimeUnit.SECONDS);
-    }
-
-    public static JsonObject loadResourceJson(String resourcePath) {
-        ResourceManager resourceManager = MinecraftClient.getInstance().getResourceManager();
-        Identifier resourceId = Identifier.of(BazaarUtils.MODID, resourcePath);
+        if (reply == null) return -1.0;
 
         try {
-            Optional<Resource> optionalResource = resourceManager.getResource(resourceId);
-            if (optionalResource.isPresent()) {
-                Resource resource = optionalResource.get();
-                try (InputStream inputStream = resource.getInputStream();
-                     InputStreamReader reader = new InputStreamReader(inputStream)) {
-                    return JsonParser.parseReader(reader).getAsJsonObject();
-                }
-            } else {
-                Util.notifyError("Could not find resource: " + resourcePath, null);
-                return new JsonObject();
+            SkyBlockBazaarReply.Product prod = reply.getProduct(productId);
+            if (prod == null) return -1.0;
+
+            if (type == ItemData.PriceType.INSTABUY) {
+                return prod.getBuySummary().isEmpty() ? 0.0
+                        : prod.getBuySummary().getFirst().getPricePerUnit();
+            } else { // INSTASELL
+                return prod.getSellSummary().isEmpty() ? 0.0
+                        : prod.getSellSummary().getFirst().getPricePerUnit();
             }
-        } catch (IOException e) {
-            Util.notifyError("Error reading resource: " + resourcePath, e);
-            return new JsonObject();
+        } catch (Exception ex) {
+            Util.notifyError("Bazaar price lookup failed for " + productId, ex);
+            return -1.0;
         }
     }
 
-//    public static File getDataFile() {
-//        return FabricLoader.getInstance().getConfigDir().resolve("bazaarutils_data.json").toFile();
-//    }
+    /** Convert human-readable item-name to Hypixel product-ID. */
+    public static String findProductId(String naturalName) {
 
-//    private static void writeJsonToFile(String jsonString) {
-//        try (FileWriter writer = new FileWriter(getDataFile())) {
-//            writer.write(jsonString);
-//        } catch (IOException e) {
-//            Util.notifyAll("Error writing JSON data to file: " + e.getMessage(), Util.notificationTypes.BAZAARDATA);
-//            e.printStackTrace();
-//        }
-//    }
+        JsonObject conv = loadResourceJson(RESOURCE_JSON)
+                .getAsJsonObject("bazaarConversions");
 
-    public static Double findItemPrice(String productId, ItemData.priceTypes priceType) {
-        if (bazaarReply == null) {
-            Util.notifyError("Bazaar data is null", null);
-            return -1.0;
+        for (String key : conv.keySet()) {
+            if (conv.get(key).getAsString().equalsIgnoreCase(naturalName))
+                return key;
         }
-        try {
-            SkyBlockBazaarReply.Product product = bazaarReply.getProduct(productId);
-            if (product == null) {
-                Util.notifyError("Could not find item using product ID: " + productId, null);
-                return -1.0;
-            }
-
-            var sell_order_summary = product.getBuySummary();
-            var buy_order_summary = product.getSellSummary();
-
-            if (priceType == ItemData.priceTypes.INSTABUY) {
-                if (sell_order_summary.isEmpty()) {
-                    Util.notifyAll("Buy summary is empty for product ID: " + productId, Util.notificationTypes.BAZAARDATA);
-                    return 0.0;
-                }
-                double sellOrderPrice = sell_order_summary.getFirst().getPricePerUnit();
-                return sellOrderPrice;
-            } else if (priceType == ItemData.priceTypes.INSTASELL) {
-                if (buy_order_summary.isEmpty()) {
-                    Util.notifyAll("Sell summary is empty for product ID: " + productId + ", returning 0 for INSTABUY.", Util.notificationTypes.BAZAARDATA);
-                    return 0.0;
-                }
-                double buyOrderPrice = buy_order_summary.getFirst().getPricePerUnit();
-                return buyOrderPrice;
-            }
-        } catch (Exception e) {
-            Util.notifyError("There was an error fetching product data (probably caused by incorrect product ID [" + productId + "])", e);
-            return -1.0;
-        }
-        // Should not be reached if priceType is INSTASELL or INSTABUY
         return null;
     }
 
-    //returns null if it cant find anything, gets product id from natural name
-    public static String findProductId(String name) {
-        JsonObject resources;
-        JsonObject bazaarConversions;
+    /* ────────────────────────────────────────────────────────── */
+    /*  internal helpers                                          */
+    /* ────────────────────────────────────────────────────────── */
 
+    private static void fetchBazaar() {
+        if (skipNextCall || (callCounter % periodSeconds) != 0) {
+            skipNextCall = false;
+            return;
+        }
+
+        APIUtils.API.getSkyBlockBazaar().whenComplete((rep, thr) -> {
+
+            callCounter++;
+            if (callCounter % 10 == 0 || callCounter < 5) skipNextCall = true;
+
+            if (thr != null) {
+                exceptionCount++;
+                if (exceptionCount % 5 == 0) periodSeconds++;
+                Util.notifyError("Hypixel API error while fetching bazaar", thr);
+                return;
+            }
+
+            reply = rep;
+            if (!BUConfig.get().watchedItems.isEmpty()) ItemData.update();
+        });
+    }
+
+    /* ------------------------------------------------------------------ */
+
+    private static JsonObject loadResourceJson(String path) {
         try {
-            resources = loadResourceJson(PRODUCT_NAME_RESOURCE);
-            bazaarConversions = resources.getAsJsonObject("bazaarConversions");
+            IResourceManager mgr = Minecraft.getMinecraft().getResourceManager();
+            ResourceLocation  id  = new ResourceLocation(BazaarUtils.MODID, path);
+            Optional<IResource> res = Optional.ofNullable(mgr.getResource(id));
 
-            for (String key : bazaarConversions.keySet()) {
-                if (bazaarConversions.get(key).getAsString().equalsIgnoreCase(name)) {
-                    return key;
+            if (res.isPresent()) {
+                try (InputStreamReader r = new InputStreamReader(res.get().getInputStream())) {
+                    return JsonParser.parseReader(r).getAsJsonObject();
                 }
             }
         } catch (Exception e) {
-            Util.notifyError("Error while finding product ID: " + e.getMessage(), e);
+            Util.notifyError("Could not load resource " + path, e);
         }
-
-//        Util.notifyAll("Couldn't find product id", Util.notificationTypes.BAZAARDATA);
-        return null;
+        return new JsonObject();
     }
-
 }
