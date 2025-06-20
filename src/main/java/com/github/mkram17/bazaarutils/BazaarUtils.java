@@ -21,75 +21,67 @@ import java.util.List;
 /**
  * Forge-1.8.9 entry-point for Bazaar-Utils.
  *
- * Completely standalone – no Fabric-API, Lombok, Orbit, Amecs, or modern
- * 1.20.x component system required.
+ * No Fabric, no Lombok – just plain vanilla + Forge classes.
  */
-@Mod(modid = BazaarUtils.MODID,
-     name  = "Bazaar Utils",
-     version = "1.0.0",
-     clientSideOnly = true)
+@Mod(modid           = BazaarUtils.MODID,
+     name            = "Bazaar Utils",
+     version         = "1.0.0",
+     clientSideOnly  = true)
 public final class BazaarUtils {
 
-    /* -------------------------------------------------------- */
-    /*  Public constants / globals                              */
-    /* -------------------------------------------------------- */
-
+    /* ─────────────────────────────────────────────────────────
+       Public constants / singletons
+       ───────────────────────────────────────────────────────── */
     public static final String MODID = "bazaarutils";
 
-    /** Lightweight helpers used everywhere in the mod. */
+    /** Lightweight GUI helper used by most features. */
     public static final GUIUtils GUI = new GUIUtils();
 
-    /** Optional stash-helper (key-binding, tick-handler …). */
+    /** Optional helper that closes the Bazaar and runs /pickupstash. */
     public static StashHelper STASH_HELPER;
 
-    /* Transient listeners created at run-time (plus those deserialised
-       from the config) – kept so we can unsubscribe on shutdown later
-       if that ever becomes necessary. */
+    /** All listeners that need to be (un)subscribed at runtime. */
     private static final List<BUListener> ALL_LISTENERS = new ArrayList<>();
 
-    /* -------------------------------------------------------- */
-    /*  Forge lifecycle                                         */
-    /* -------------------------------------------------------- */
-
+    /* ─────────────────────────────────────────────────────────
+       Forge lifecycle
+       ───────────────────────────────────────────────────────── */
     @EventHandler
-    public void init(FMLInitializationEvent event) {
+    public void init(FMLInitializationEvent e) {
 
-        /* 1) Load or create the JSON config ------------------------ */
-        BUConfig.HANDLER.load();
+        /* 1 ─ Load (or create) the JSON config */
+        BUConfig.load();                       // static helper
 
-        /* 2) Apply run-time compatibility patches for other mods --- */
-        ModCompatibilityHelper.initializePatches();
+        /* 2 ─ Runtime compatibility tweaks for other mods */
+        ModCompatibilityHelper.initPatches();
 
-        /* 3) Register “/bu …” chat-based commands ------------------ */
-        Commands.register();   // implemented with a chat-listener internally
+        /* 3 ─ Register chat-based “/bu …” command */
+        Commands.register();                   // no args since refactor
 
-        /* 4) Key-binding helper (simple tick-counter in 1.8.9) ------ */
+        /* 4 ─ Create optional key-binding helper */
         STASH_HELPER = new StashHelper();
-        STASH_HELPER.registerTickCounter();   // hooks END_CLIENT_TICK
+        STASH_HELPER.startTickCounter();       // hooks END_CLIENT_TICK
 
-        /* 5) Gather & subscribe every listener --------------------- */
-        BUListener.addTransientEvents();                     // create on-the-fly
+        /* 5 ─ Gather and subscribe every event listener */
+        BUListener.addTransientEvents();                       // build on-the-fly
         ALL_LISTENERS.addAll(BUListener.getTransientEvents());
         ALL_LISTENERS.addAll(BUConfig.get().getSerializedEvents());
         ALL_LISTENERS.forEach(BUListener::subscribe);
 
-        /* 6) First-run defaults – add a single “Diamond” bookmark --- */
-        if (BUConfig.get().bookmarks.isEmpty()) {
-            BUConfig.get().bookmarks.add(
-                    new Bookmark("Diamond", new ItemStack(Items.diamond))
-            );
+        /* 6 ─ First-run defaults: add a single “Diamond” bookmark */
+        if (BUConfig.get().getBookmarks().isEmpty()) {
+            BUConfig.get().getBookmarks()
+                    .add(new Bookmark("Diamond", new ItemStack(Items.diamond)));
         }
 
-        /* 7) Register our utility listeners on the Forge bus -------- */
+        /* 7 ─ Register the mod itself on the Forge event bus */
         MinecraftForge.EVENT_BUS.register(this);
     }
 
-    /* -------------------------------------------------------- */
-    /*  Tiny helpers                                            */
-    /* -------------------------------------------------------- */
-
-    /** Convenience shortcut: returns the client instance. */
-    public static Minecraft mc() {
+    /* ─────────────────────────────────────────────────────────
+       Convenience
+       ───────────────────────────────────────────────────────── */
+    public static Minecraft mc() {                   // short-hand
         return Minecraft.getMinecraft();
     }
 }
