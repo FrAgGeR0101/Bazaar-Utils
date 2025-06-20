@@ -1,114 +1,117 @@
 package com.github.mkram17.bazaarutils.features;
 
 import com.github.mkram17.bazaarutils.BazaarUtils;
+import com.github.mkram17.bazaarutils.config.BUConfig;
 import com.github.mkram17.bazaarutils.events.BUListener;
 import com.github.mkram17.bazaarutils.events.OutdatedItemEvent;
+import com.github.mkram17.bazaarutils.misc.CustomItemButton;      // tiny Option-stub lives here
 import com.github.mkram17.bazaarutils.utils.SoundUtil;
 import com.github.mkram17.bazaarutils.utils.Util;
-import com.github.mkram17.bazaarutils.config.BUConfig;
-import dev.isxander.yacl3.api.Option;
-import dev.isxander.yacl3.api.OptionDescription;
-import lombok.Getter;
-import lombok.Setter;
-import meteordevelopment.orbit.EventHandler;
-import net.minecraft.text.MutableText;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
+import net.minecraft.util.EnumChatFormatting;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
 
-import static com.github.mkram17.bazaarutils.BazaarUtils.eventBus;
+/**
+ * Handles “order outdated” notifications + optional auto-opening of the Bazaar.
+ * <p>No Fabric / YACL / Lombok / Orbit dependencies – pure Forge 1.8.9.</p>
+ */
+public final class OutdatedItems implements BUListener {
 
-//TODO change the message number instead of sending more
-public class OutdatedItems implements BUListener {
-    @Getter @Setter
+    /* ───────────────────────── configurable flags ───────────────────────── */
+
     private boolean autoOpenEnabled;
-    @Getter @Setter
     private boolean notifyOutdated;
-    @Getter @Setter
     private boolean notificationSound;
 
+    /* ───────────────────────────── ctor / config ────────────────────────── */
 
-    public OutdatedItems(boolean autoOpenEnabled, boolean notifyOutdated) {
-        this.autoOpenEnabled = autoOpenEnabled;
-        this.notifyOutdated = notifyOutdated;
-        this.notificationSound = true;
+    public OutdatedItems(boolean autoOpen, boolean notify, boolean sound) {
+        this.autoOpenEnabled   = autoOpen;
+        this.notifyOutdated    = notify;
+        this.notificationSound = sound;
     }
 
-    @EventHandler
-    public void onOutdated(OutdatedItemEvent e){
-        if(notifyOutdated) {
-            Text amount = Text.literal(e.getItem().getVolume() + "x ").formatted(Formatting.BOLD).formatted(Formatting.DARK_PURPLE);
-            Text itemName = Text.literal(e.getItem().getName().formatted(Formatting.BOLD).formatted(Formatting.GOLD));
-            MutableText message = Text.literal("[Bazaar Utils] ").formatted(Formatting.GOLD)
-                    .append(Text.literal("Your " + e.getItem().getPriceType().getString() + " for ").formatted(Formatting.WHITE))
-                    .append(amount)
-                    .append(itemName)
-                    .append(Text.literal( " is now outdated.").formatted(Formatting.WHITE))
-                    .append(Text.literal(" Click for /bz").formatted(Formatting.GOLD));
+    /* ───────────────────────────── event hook ───────────────────────────── */
 
+    /** Called by the simple Orbit event-bus when an order becomes outdated. */
+    public void onOutdated(OutdatedItemEvent ev) {
 
-            Util.tickExecuteLater(2, () -> {
-                if(BUConfig.get().developerMode) {
-                    message.append(Text.literal(". Market Price: " + e.getItem().getMarketPrice() + " Order Price: " + e.getItem().getPrice()));
-                    Util.notifyChatCommand(message, "bz");
-                } else
-                    Util.notifyChatCommand(message, "bz");
-            });
-            if(notificationSound)
-                SoundUtil.notifyMultipleTimes(3);
+        /* 1) chat notice + optional sound */
+        if (notifyOutdated) {
+            Util.notifyAll(
+                    EnumChatFormatting.GOLD + "[Bazaar-Utils] " + EnumChatFormatting.RESET +
+                    "Your " + ev.getItem().getPriceType().getString() + " for " +
+                    EnumChatFormatting.DARK_PURPLE + "" + EnumChatFormatting.BOLD +
+                    ev.getItem().getVolume() + "x " +
+                    EnumChatFormatting.GOLD + "" + EnumChatFormatting.BOLD +
+                    ev.getItem().getName() + EnumChatFormatting.RESET +
+                    " is now outdated.");
+
+            if (notificationSound) SoundUtil.notifyMultipleTimes(3);
         }
-        if(BazaarUtils.gui.inBazaar() || !autoOpenEnabled)
-            return;
-        CompletableFuture.runAsync(() ->{
-            for(int i = 3; i >= 1; i--) {
-                try {
-                    if(i == 3)
-                        Util.notifyAll("Opening bazaar in 3");
-                    else
-                        Util.notifyAll(String.valueOf(i));
-                    Thread.sleep(1000);
-                } catch (InterruptedException ex) {
-                    throw new RuntimeException(ex);
-                }
-            }
 
-            Util.sendCommand("bz");
-        });
+        /* 2) auto-open the Bazaar after a short countdown */
+        if (autoOpenEnabled && !BazaarUtils.GUI.inBazaar()) {
+            CompletableFuture.runAsync(() -> {
+                try {
+                    for (int i = 3; i > 0; i--) {
+                        Util.notifyAll("Opening Bazaar in " + i + "…");
+                        Thread.sleep(1_000);
+                    }
+                    Util.sendCommand("bz");
+                } catch (InterruptedException ignored) {}
+            });
+        }
     }
-    public Collection<Option<Boolean>> createOptions() {
-        ArrayList<Option<Boolean>> options = new ArrayList<>();
-        options.add(Option.<Boolean>createBuilder()
-                .name(Text.literal("Open Bazaar on Outdated Orders"))
-                .description(OptionDescription.of(Text.literal("Automatically open the bazaar after a delay when an order becomes outdated.")))
+
+    /* ───────────────────── tiny config-GUI helpers (stubs) ───────────────── */
+
+    public Collection<CustomItemButton.Option<Boolean>> createOptions() {
+        Collection<CustomItemButton.Option<Boolean>> list = new ArrayList<>();
+
+        list.add(CustomItemButton.Option.<Boolean>createBuilder()
+                .name("Open Bazaar on outdated orders")
                 .binding(false,
-                        this::isAutoOpenEnabled,
-                        this::setAutoOpenEnabled)
-                .controller(BUConfig::createBooleanController)
+                         () -> autoOpenEnabled,
+                         v  -> autoOpenEnabled = v)
+                .controller(BUConfig::createBooleanController)       // still points to your stub
                 .build());
-        options.add(Option.<Boolean>createBuilder()
-                .name(Text.literal("Notify on Outdated Orders"))
-                .description(OptionDescription.of(Text.literal("Sends a message in chat when someone has undercut your order.")))
+
+        list.add(CustomItemButton.Option.<Boolean>createBuilder()
+                .name("Chat message on outdated orders")
                 .binding(true,
-                        this::isNotifyOutdated,
-                        this::setNotifyOutdated)
+                         () -> notifyOutdated,
+                         v  -> notifyOutdated = v)
                 .controller(BUConfig::createBooleanController)
                 .build());
-        options.add(Option.<Boolean>createBuilder()
-                .name(Text.literal("Sound for Outdated Orders"))
-                .description(OptionDescription.of(Text.literal("Plays three short notification sounds when your order becomes outdated.")))
+
+        list.add(CustomItemButton.Option.<Boolean>createBuilder()
+                .name("Play sound on outdated orders")
                 .binding(true,
-                        this::isNotificationSound,
-                        this::setNotificationSound)
+                         () -> notificationSound,
+                         v  -> notificationSound = v)
                 .controller(BUConfig::createBooleanController)
                 .build());
-        return options;
+
+        return list;
     }
+
+    /* ────────────────────────── BUListener impl. ────────────────────────── */
 
     @Override
     public void subscribe() {
-        eventBus.subscribe(this);
+        BazaarUtils.EVENT_BUS.subscribe(this);
     }
+
+    /* ───────────────────────── getters / setters ────────────────────────── */
+
+    public boolean isAutoOpenEnabled()   { return autoOpenEnabled;   }
+    public boolean isNotifyOutdated()    { return notifyOutdated;    }
+    public boolean isNotificationSound() { return notificationSound; }
+
+    public void setAutoOpenEnabled(boolean v)   { autoOpenEnabled   = v; }
+    public void setNotifyOutdated(boolean v)    { notifyOutdated    = v; }
+    public void setNotificationSound(boolean v) { notificationSound = v; }
 }
