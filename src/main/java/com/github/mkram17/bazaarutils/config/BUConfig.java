@@ -1,265 +1,94 @@
 package com.github.mkram17.bazaarutils.config;
 
 import com.github.mkram17.bazaarutils.events.BUListener;
-import com.github.mkram17.bazaarutils.features.*;
-import com.github.mkram17.bazaarutils.features.restrictsell.RestrictSell;
-import com.github.mkram17.bazaarutils.features.restrictsell.RestrictSellControl;
-import com.github.mkram17.bazaarutils.misc.ItemData;
-import com.github.mkram17.bazaarutils.misc.ItemSlotButtonWidget;
-import com.github.mkram17.bazaarutils.misc.ItemStackCodecGsonAdapter;
-import com.github.mkram17.bazaarutils.misc.ModCompatibilityHelper;
 import com.github.mkram17.bazaarutils.utils.Util;
-import dev.isxander.yacl3.api.*;
-import dev.isxander.yacl3.api.controller.BooleanControllerBuilder;
-import dev.isxander.yacl3.config.v2.api.ConfigClassHandler;
-import dev.isxander.yacl3.config.v2.api.SerialEntry;
-import dev.isxander.yacl3.config.v2.api.serializer.GsonConfigSerializerBuilder;
-import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ConfirmLinkScreen;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.text.Text;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.lang.reflect.Field;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
-
+/** Minimal config holder – no Fabric API, no YACL, no Java-17 features. */
 public class BUConfig {
-    public static final ConfigClassHandler<BUConfig> HANDLER = ConfigClassHandler.createBuilder(BUConfig.class)
-            .serializer(config -> GsonConfigSerializerBuilder.create(config)
-                    .setPath(FabricLoader.getInstance().getConfigDir().resolve("bazaarutils.json"))
-                    .appendGsonBuilder(gsonBuilder -> gsonBuilder
-                            .setPrettyPrinting()
-                            .registerTypeAdapter(ItemStack.class, new ItemStackCodecGsonAdapter())) // not needed, pretty print by default
-                    .build())
-            .build();
 
-    public static BUConfig get() {
-        return HANDLER.instance();
+    /* ───────────────────────── serialization ───────────────────────── */
+    private static final File  FILE = new File("config/bazaarutils-189.json");
+    private static final Gson  GSON = new GsonBuilder()
+                                            .setPrettyPrinting()
+                                            .create();
+
+    public  static BUConfig INSTANCE = new BUConfig();
+    public  static BUConfig get()    { return INSTANCE; }
+
+    /** call once during mod initialisation */
+    public static void load() {
+        try (FileReader r = new FileReader(FILE)) {
+            INSTANCE = GSON.fromJson(r, BUConfig.class);
+        } catch (Exception ignored) { /* first run or damaged file */ }
     }
 
-
-    @SerialEntry
-    public String MODVERSION = "";
-    @SerialEntry
-    public boolean firstLoad = true;
-    @SerialEntry
-    public FlipHelper flipHelper = new FlipHelper(true, 17, Items.CHERRY_SIGN);
-    @SerialEntry
-    public ArrayList<ItemData> watchedItems = new ArrayList<>();
-    @SerialEntry
-    public double bzTax = 1.125;
-    @SerialEntry
-    public ArrayList<CustomOrder> customOrders = new ArrayList<>();
-    @SerialEntry
-    public boolean developerMode = false;
-    @SerialEntry
-    public OutdatedItems outdatedItems = new OutdatedItems(false, true);
-    //TODO make restrict sell able to take empty array list (might need to think about config gui group + options)
-    @SerialEntry
-    public RestrictSell restrictSell = new RestrictSell(true, 3, new ArrayList<>(List.of(new RestrictSellControl(RestrictSell.restrictBy.PRICE, 1000000))));
-    @SerialEntry
-    public Developer developer = new Developer();
-    @SerialEntry
-    public StashMessages stashMessages = new StashMessages(false);
-    @SerialEntry
-    public ArrayList<Bookmark> bookmarks = new ArrayList<>();
-    @SerialEntry
-    public PriceCharts priceCharts = new PriceCharts();
-
-
-    public static void openGUI() {
-        MinecraftClient client = MinecraftClient.getInstance();
-        client.send(() -> client.setScreen(BUConfig.get().createGUI(null)));
-    }
-
-    public Screen createGUI(Screen parent) {
-        return YetAnotherConfigLib.create(HANDLER, (defaults, config, builder) -> {
-            builder.title(Text.literal("Bazaar utils"));
-            OptionGroup.Builder restrictSellGroupBuilder = OptionGroup.createBuilder()
-                    .name(Text.literal("Sell rules"))
-                    .description(OptionDescription.of(Text.literal("Blocks insta selling based on rules. You can add a new rule with /bu rule add {based on volume or price} {amount over which will be restricted} or you can remove it with /bu rule remove {rule number}")));
-            if (restrictSell.getControls().isEmpty()) {
-                restrictSell.addRule(RestrictSell.restrictBy.PRICE, 1000000);
+    /** call when you change a field and want to persist it */
+    public static void save() {
+        try {
+            FILE.getParentFile().mkdirs();
+            try (FileWriter w = new FileWriter(FILE)) {
+                GSON.toJson(INSTANCE, w);
             }
-            restrictSell.buildOptions(restrictSellGroupBuilder);
-
-            ConfigCategory.Builder generalBuilder = ConfigCategory.createBuilder();
-            generalBuilder.name(Text.literal("General"))
-                    .option(flipHelper.createOption())
-                    .options(outdatedItems.createOptions())
-                    .option(stashMessages.createOption())
-                    .option(priceCharts.createOption());
-            if(!ModCompatibilityHelper.isAmecsReborn())
-                generalBuilder.option(createAmecsDownloadButton());
-
-            generalBuilder.group(restrictSellGroupBuilder.build());
-
-            builder.category(generalBuilder.build());
-
-            if (customOrders.isEmpty()) {
-                customOrders.add(new CustomOrder(true, 71680, 17, CustomOrder.COLORMAP.get(0)));
-            }
-            OptionGroup.Builder customOrdersGroupBuilder = OptionGroup.createBuilder()
-                    .name(Text.literal("Custom Buy Amounts"))
-                    .description(OptionDescription.of(Text.literal("Add buttons for custom buy order/insta buy amounts. To add more do /bu customorder add {order amount} {slot number} (top left slot is slot #1, to the right is #2, etc etc.")));
-
-            CustomOrder.buildOptions(customOrdersGroupBuilder);
-            builder.category(CustomOrder.createOrdersCategory().group(customOrdersGroupBuilder.build()).build());
-
-            if(developerMode) {
-                builder.category(
-                        Developer.createDevBuilder()
-                                .option(Option.<Boolean>createBuilder()
-                                        .name(Text.literal("All Messages"))
-                                        .binding(developer.allMessages,
-                                                () -> developer.allMessages,
-                                                newVal -> developer.allMessages = newVal)
-                                        .controller(BUConfig::createBooleanController)
-                                        .build())
-
-                                .group(
-                                        OptionGroup.createBuilder()
-                                                .name(Text.literal("Message Options"))
-                                                .description(OptionDescription.of(Text.literal("DEVELOPER ONLY")))
-                                                .options(developer.createOptions())
-                                                .build()
-                                )
-                                .build());
-            }
-            return builder;
-        }).generateScreen(parent);
+        } catch (Exception e) { e.printStackTrace(); }
     }
 
-    public static BooleanControllerBuilder createBooleanController(Option<Boolean> opt) {
-        return BooleanControllerBuilder.create(opt).onOffFormatter().coloured(true);
-    }
+    /* ───────────────────────── config values ───────────────────────── */
 
+    public String  modVersion = "";   // set at runtime
+    public boolean firstLoad  = true;
+    public double  bzTax      = 1.125;
+
+    // TODO: add more simple fields if you need them
+    public final Developer developer = new Developer();
+
+    /* ────────────────── helper: collect BUListener instances ────────── */
     public List<BUListener> getSerializedEvents() {
-        List<BUListener> events = new ArrayList<>();
-
-        for (Field field : this.getClass().getDeclaredFields()) {
-            field.setAccessible(true);
+        List<BUListener> list = new ArrayList<>();
+        for (Field f : getClass().getDeclaredFields()) {
             try {
-                Object value = field.get(this);
-
-                if (value instanceof BUListener) {
-                    events.add((BUListener) value);
-                }
-                else if (value instanceof Collection) {
-                    for (Object item : (Collection<?>) value) {
-                        if (item instanceof BUListener) {
-                            events.add((BUListener) item);
-                        }
-                    }
+                Object v = f.get(this);
+                if (v instanceof BUListener)                    list.add((BUListener) v);
+                else if (v instanceof Collection<?>) {
+                    for (Object o : (Collection<?>) v)
+                        if (o instanceof BUListener)            list.add((BUListener) o);
                 }
             } catch (IllegalAccessException e) {
-                Util.notifyError("Error accessing field: " + field.getName() + " - " + e.getMessage(), e);
+                Util.notifyError("Reflection error on " + f.getName(), e);
             }
         }
-        return events;
-
-
+        return list;
     }
 
-    public static List<ItemSlotButtonWidget> getWidgets(){
-        List<ItemSlotButtonWidget> widgets = new ArrayList<>();
-
-        widgets.addAll(Bookmark.getWidgets());
-        widgets.addAll(BazaarSettingsButton.getWidget());
-        return widgets;
-    }
-    private static ButtonOption createAmecsDownloadButton() {
-        return ButtonOption.createBuilder()
-                .name(Text.of("Download Amecs Reborn"))
-                .description(OptionDescription.of(Text.of("Amecs Reborn is needed for the Stash Helper feature. Download here.")))
-                .text(Text.of("(for Stash Helper)")) // optional
-                .action((yaclScreen, buttonOption) -> {
-                    MinecraftClient.getInstance().setScreen(new ConfirmLinkScreen((confirmed) -> {
-                        if (confirmed) {
-                            try {
-                                net.minecraft.util.Util.getOperatingSystem().open(new URI("https://modrinth.com/mod/amecs-reborn"));
-                            } catch (URISyntaxException e) {
-                                throw new RuntimeException(e);
-                            }
-                        }
-                        MinecraftClient.getInstance().setScreen(null);
-                    }, "https://modrinth.com/mod/amecs-reborn", true));
-                })
-                .build();
-    }
+    /* ───────────────────── developer flags & helpers ────────────────── */
     public static class Developer {
-        public boolean allMessages = false;
-        public boolean errorMessages = false;
-        public boolean guiMessages = false;
-        public boolean featureMessages = false;
+        public boolean allMessages        = false;
+        public boolean errorMessages      = false;
+        public boolean guiMessages        = false;
+        public boolean featureMessages    = false;
         public boolean bazaarDataMessages = false;
-        public boolean commandMessages = false;
-        public boolean itemDataMessages = false;
-        public static  ConfigCategory.Builder createDevBuilder(){
-            return ConfigCategory.createBuilder()
-                    .name(Text.literal("Developer"));
+        public boolean commandMessages    = false;
+        public boolean itemDataMessages   = false;
+    }
+
+    /** true if a particular developer-message category should be shown */
+    public boolean isDevMessageEnabled(Util.notificationTypes t) {
+        switch (t) {
+            case GUI:        return developer.guiMessages;
+            case FEATURE:    return developer.featureMessages;
+            case BAZAARDATA: return developer.bazaarDataMessages;
+            case COMMAND:    return developer.commandMessages;
+            case ITEMDATA:   return developer.itemDataMessages;
+            default:         return developer.allMessages;
         }
-
-
-        public Collection<? extends Option<?>> createOptions() {
-            ArrayList<Option<?>> optionList = new ArrayList<>();
-                    optionList.add(Option.<Boolean>createBuilder()
-                            .name(Text.literal("Error Messages"))
-                            .binding(errorMessages,
-                                    () -> errorMessages,
-                                    newVal -> errorMessages = newVal)
-                            .controller(BUConfig::createBooleanController)
-                            .build());
-            optionList.add(Option.<Boolean>createBuilder()
-                            .name(Text.literal("GUI Messages"))
-                            .binding(guiMessages,
-                                    () -> guiMessages,
-                                    newVal -> guiMessages = newVal)
-                            .controller(BUConfig::createBooleanController)
-                            .build());
-            optionList.add(Option.<Boolean>createBuilder()
-                            .name(Text.literal("Feature Messages"))
-                            .binding(featureMessages,
-                                    () -> featureMessages,
-                                    newVal -> featureMessages = newVal)
-                            .controller(BUConfig::createBooleanController)
-                            .build());
-            optionList.add(Option.<Boolean>createBuilder()
-                            .name(Text.literal("Bazaar Data Messages"))
-                            .binding(bazaarDataMessages,
-                                    () -> bazaarDataMessages,
-                                    newVal -> bazaarDataMessages = newVal)
-                            .controller(BUConfig::createBooleanController)
-                            .build());
-                    optionList.add(Option.<Boolean>createBuilder()
-                            .name(Text.literal("Command Messages"))
-                            .binding(commandMessages,
-                                    () -> commandMessages,
-                                    newVal -> commandMessages = newVal)
-                            .controller(BUConfig::createBooleanController)
-                            .build());
-                    optionList.add(Option.<Boolean>createBuilder()
-                            .name(Text.literal("Item Data Messages"))
-                            .binding(itemDataMessages,
-                                    () -> itemDataMessages,
-                                    newVal -> itemDataMessages = newVal)
-                            .controller(BUConfig::createBooleanController)
-                            .build());
-                    return optionList;
-        }
-
-switch (type) {
-    case GUI:        return guiMessages;
-    case FEATURE:    return featureMessages;
-    case BAZAARDATA: return bazaarDataMessages;
-    case COMMAND:    return commandMessages;
-    case ITEMDATA:   return itemDataMessages;
-    default:         return guiMessages;   
+    }
 }
