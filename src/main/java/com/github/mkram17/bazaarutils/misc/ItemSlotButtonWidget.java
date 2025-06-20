@@ -8,14 +8,13 @@ import net.minecraft.client.renderer.entity.RenderItem;
 import net.minecraft.item.ItemStack;
 
 /**
- * A small square GUI-button that shows an {@link ItemStack} and calls a
- * “press action” when clicked.  
- * Completely self-contained – no Fabric, no Lombok, no modern classes.
+ * Small square button that renders an ItemStack and runs a callback on click.
+ * Pure Forge 1.8.9 – no Fabric / Lombok / modern APIs required.
  */
 public final class ItemSlotButtonWidget extends GuiButton {
 
     /* ------------------------------------------------------------------ */
-    /*  Callback interface (Forge 1.8.9 has no built-in functional type)  */
+    /*  Functional callback (Forge 1.8.9 has no built-in functional types)*/
     /* ------------------------------------------------------------------ */
     public interface PressAction { void onPress(ItemSlotButtonWidget btn); }
 
@@ -28,14 +27,13 @@ public final class ItemSlotButtonWidget extends GuiButton {
     /* ------------------------------------------------------------------ */
     /*  Construction                                                      */
     /* ------------------------------------------------------------------ */
-    public ItemSlotButtonWidget(int x, int y,
-                                int size,
+    public ItemSlotButtonWidget(int x, int y, int size,
                                 ItemStack icon,
                                 PressAction onPress) {
 
-        /* Forge-1.8.9 GuiButton ctor: id, x, y, width, height, text       */
+        /* GuiButton(id,x,y,width,height,text) – we never need an id       */
         super(-1, x, y, size, size, "");
-        this.icon    = icon.copy();
+        this.icon    = icon == null ? null : icon.copy();
         this.onPress = onPress;
     }
 
@@ -46,19 +44,18 @@ public final class ItemSlotButtonWidget extends GuiButton {
     public void drawButton(Minecraft mc, int mouseX, int mouseY) {
         if (!visible) return;
 
-        // background: simple semi-transparent rectangle
-        int colour = 0x80FFFFFF;                       // 50 % white
+        /* simple semi-transparent white slot background                   */
         drawRect(xPosition, yPosition,
                  xPosition + width, yPosition + height,
-                 colour);
+                 0x80FFFFFF);
 
-        // render the item icon in the centre
-        if (!icon.isEmpty()) {
+        /* render the item icon if present                                 */
+        if (icon != null && icon.stackSize > 0) {
             RenderHelper.enableGUIStandardItemLighting();
-            RenderItem renderer = mc.getRenderItem();
-            int iconX = xPosition + (width  - 16) / 2;
-            int iconY = yPosition + (height - 16) / 2;
-            renderer.renderItemAndEffectIntoGUI(icon, iconX, iconY);
+            RenderItem ri = mc.getRenderItem();
+            int ix = xPosition + (width  - 16) / 2;
+            int iy = yPosition + (height - 16) / 2;
+            ri.renderItemAndEffectIntoGUI(icon, ix, iy);
             RenderHelper.disableStandardItemLighting();
         }
     }
@@ -69,28 +66,54 @@ public final class ItemSlotButtonWidget extends GuiButton {
     @Override
     public boolean mousePressed(Minecraft mc, int mx, int my) {
         boolean inside = super.mousePressed(mc, mx, my);
-        if (inside && enabled && onPress != null)
-            onPress.onPress(this);
+        if (inside && enabled && onPress != null) onPress.onPress(this);
         return inside;
     }
 
     /* ------------------------------------------------------------------ */
-    /*  Helper: safe area inside a {@link GuiContainer}                   */
+    /*  Helper ­– safe co-ordinates inside a GuiContainer                 */
     /* ------------------------------------------------------------------ */
-    public static class ScreenWidgetDimensions {
+    public static final class ScreenWidgetDimensions {
         public final int x, y, backgroundWidth;
         public ScreenWidgetDimensions(int x, int y, int bw) {
             this.x = x; this.y = y; this.backgroundWidth = bw;
         }
     }
 
-    /** Derive <code>guiLeft</code>, <code>guiTop</code> and <code>xSize</code>. */
+    /**
+     * Reflectively obtain {@code guiLeft}, {@code guiTop} and {@code xSize}
+     * from any {@link GuiContainer}.  Works on obfuscated 1.8.9 jars as well
+     * (fallback SRG names are provided).
+     */
     public static ScreenWidgetDimensions getSafeScreenDimensions(GuiContainer gui) {
-        return new ScreenWidgetDimensions(gui.guiLeft, gui.guiTop, gui.xSize);
+
+        try {
+            int left =  (Integer) getField(gui, "guiLeft",  "field_147003_i");
+            int top  =  (Integer) getField(gui, "guiTop",   "field_147009_r");
+            int size =  (Integer) getField(gui, "xSize",    "field_146999_f");
+
+            return new ScreenWidgetDimensions(left, top, size);
+        } catch (Exception e) {
+            /* fallback: standard 176×166 vanilla container                */
+            return new ScreenWidgetDimensions( (gui.width  - 176) / 2,
+                                               (gui.height - 166) / 2,
+                                               176);
+        }
+    }
+
+    /* reflect helper with unobfuscated + SRG fallback names               */
+    private static Object getField(Object obj, String mcp, String srg) throws Exception {
+        try {
+            java.lang.reflect.Field f = obj.getClass().getField(mcp);
+            return f.get(obj);
+        } catch (NoSuchFieldException e) {
+            java.lang.reflect.Field f = obj.getClass().getField(srg);
+            return f.get(obj);
+        }
     }
 
     /* ------------------------------------------------------------------ */
-    /*  Simple getters                                                    */
+    /*  Simple accessor                                                   */
     /* ------------------------------------------------------------------ */
     public ItemStack getIcon() { return icon; }
 }
