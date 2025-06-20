@@ -33,13 +33,17 @@ public class ChestLoadedEvent implements ICancellable, BUListener {
 
     public static void registerScreenEvent() {
         ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
-            if (screen instanceof GenericContainerScreen genericContainerScreen) {
+            if (screen instanceof GenericContainerScreen) {
+    GenericContainerScreen genericContainerScreen =
+        (GenericContainerScreen) screen;
                 CompletableFuture.runAsync(() -> checkIfGuiLoaded(genericContainerScreen)).thenRun(() -> {
 //                    Util.notifyAll("Chest loaded event went off!", Util.notificationTypes.GUI);
 
                     ChestLoadedEvent event = new ChestLoadedEvent();
                     ScreenHandler handler = genericContainerScreen.getScreenHandler();
-                    if (handler instanceof GenericContainerScreenHandler containerHandler) {
+                   if (handler instanceof GenericContainerScreenHandler) {
+    GenericContainerScreenHandler containerHandler =
+        (GenericContainerScreenHandler) handler;
                         event.lowerChestInventory = containerHandler.getInventory();
                         event.containerName = GUIUtils.getContainerName();
                         event.itemStacks = returnItemStacks(event.lowerChestInventory);
@@ -74,7 +78,9 @@ public class ChestLoadedEvent implements ICancellable, BUListener {
             }
 
             ScreenHandler handler = screen.getScreenHandler();
-            if (handler instanceof GenericContainerScreenHandler containerHandler) {
+            if (handler instanceof GenericContainerScreenHandler) {
+    GenericContainerScreenHandler containerHandler =
+        (GenericContainerScreenHandler) handler;
                 Inventory inv = containerHandler.getInventory();
                 int size = inv.size();
                 if (size == 0) continue;

@@ -255,14 +255,14 @@ public class BUConfig {
                     return optionList;
         }
 
-        public boolean isDeveloperVariableEnabled(Util.notificationTypes type) {
-            return switch (type) {
-                case GUI -> guiMessages;
-                case FEATURE -> featureMessages;
-                case BAZAARDATA -> bazaarDataMessages;
-                case COMMAND -> commandMessages;
-                case ITEMDATA -> itemDataMessages;
-            };
+switch (type) {
+    case GUI:        return guiMessages;
+    case FEATURE:    return featureMessages;
+    case BAZAARDATA: return bazaarDataMessages;
+    case COMMAND:    return commandMessages;
+    case ITEMDATA:   return itemDataMessages;
+    default:         return guiMessages; 
+}
         }
     }
 }

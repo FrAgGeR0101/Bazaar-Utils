@@ -52,7 +52,7 @@ public class ItemData {
             INSTABUY.opposite = INSTASELL;
         }
         public String getString(){
-            return switch (this) {
+            return switch (type) {
                 case INSTASELL -> "buy order";
                 case INSTABUY -> "sell order";
             };

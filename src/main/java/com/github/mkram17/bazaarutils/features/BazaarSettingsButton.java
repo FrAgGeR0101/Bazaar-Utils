@@ -21,7 +21,10 @@ public class BazaarSettingsButton {
 
     public static List<ItemSlotButtonWidget> getWidget() {
         boolean isTargetScreen = BazaarUtils.gui.inBazaar();
-        if (!(MinecraftClient.getInstance().currentScreen instanceof AccessorHandledScreen screen) || !isTargetScreen)
+        if (!(MinecraftClient.getInstance().currentScreen instanceof AccessorHandledScreen) || !isTargetScreen)
+{
+    AccessorHandledScreen screen =
+        (AccessorHandledScreen) MinecraftClient.getInstance().currentScreen;
             return Collections.emptyList();
 
         String screenTitle = MinecraftClient.getInstance().currentScreen.getTitle().getString();
