@@ -5,186 +5,226 @@ import com.github.mkram17.bazaarutils.config.BUConfig;
 import com.github.mkram17.bazaarutils.events.BUListener;
 import com.github.mkram17.bazaarutils.events.ChestLoadedEvent;
 import com.github.mkram17.bazaarutils.misc.ItemData;
-import meteordevelopment.orbit.EventHandler;
-import net.minecraft.component.DataComponentTypes;
+import net.minecraft.init.Blocks;
+import net.minecraft.init.Items;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.text.Text;
+import net.minecraft.nbt.NBTTagCompound;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
-import static com.github.mkram17.bazaarutils.BazaarUtils.eventBus;
+import static com.github.mkram17.bazaarutils.BazaarUtils.EVENT_BUS;
 
-public class ItemUpdater implements BUListener {
-    private static ArrayList<ItemStack> orderStacks = new ArrayList<>();
-    private static List<ItemStack> orderScreen;
-    @EventHandler
-    public static void onGUI(ChestLoadedEvent e){
-        if(!BazaarUtils.gui.inBuyOrders())
-            return;
+/**
+ * Parses the “Co-op Bazaar Orders” chest GUI and keeps {@link BUConfig#watchedItems}
+ * in sync.  Pure Forge 1.8.9 – no Fabric classes, no Lombok, no Orbit.
+ */
+public final class ItemUpdater implements BUListener {
 
-        orderScreen = e.getItemStacks();
-        orderStacks = findOrders(orderScreen);
-        updateWatchedItems(orderStacks);
-    }
+    /* live references while the GUI is open */
+    private List<ItemStack> chestStacks   = new ArrayList<>();
+    private List<ItemStack> orderEntries  = new ArrayList<>();
 
-    private static void updateWatchedItems(ArrayList<ItemStack> orderStacks){
-        List<ItemData> foundItems = new ArrayList<>();
-        for(ItemStack stack : orderStacks){
-            //? if >= 1.21.4 {
-                    String customName = stack.getCustomName().getString();
-            //?} else {
-            /*String customName = stack.getComponentChanges().get(DataComponentTypes.CUSTOM_NAME).get().getString();
-            *///?}
-            String name = "";
-            boolean isSellOrder;
-            double unitPrice;
-            double fullPrice;
-            int volumeFilled = -1;
-            int totalVolume;
-            int amountUnclaimed = 0;
-            int amountClaimed = -1;
-            List<Text> changedComponents = stack.getComponentChanges().get(DataComponentTypes.LORE).get().styledLines();
-
-            if(customName.contains("BUY")){
-                name = customName.substring(4);
-                isSellOrder = false;
-            } else {
-                name = customName.substring(5);
-                isSellOrder = true;
-            }
-
-            if(Util.findComponentWith(changedComponents, "Filled") != null) {
-                var volumeFilledString = Util.findComponentWith(changedComponents, "Filled");
-                volumeFilled = Util.parseNumber(volumeFilledString.substring(8, volumeFilledString.indexOf("/")));
-                totalVolume = Util.parseNumber(volumeFilledString.substring(volumeFilledString.indexOf("/") + 1, volumeFilledString.lastIndexOf(" ")));
-            } else {
-//                fullPrice = Util.parseNumber(Util.extractTextAfterWord(Util.findComponentWith(changedComponents, "Worth"), "Worth"));
-                totalVolume = Util.parseNumber(changedComponents.get(2).getSiblings().get(1).getString());
-
-            }
-            unitPrice = Double.parseDouble(Util.extractTextAfterWord(Util.findComponentWith(changedComponents, "per unit"), "unit:"));
-            fullPrice = unitPrice*totalVolume;
-
-            if(volumeFilled != -1) {
-                if (Util.findComponentWith(changedComponents, "to claim!") != null) {
-                    var amountUnclaimedString = Util.findComponentWith(changedComponents, "to claim!");
-                    if(!amountUnclaimedString.contains("items")) {
-                        amountUnclaimed = Util.parseNumber(amountUnclaimedString.substring(9, amountUnclaimedString.indexOf(" coins")));
-                    } else {
-                        amountUnclaimed = Util.parseNumber(amountUnclaimedString.substring(9, amountUnclaimedString.indexOf("items") - 1));
-                    }
-                    amountClaimed = volumeFilled - amountUnclaimed;
-                } else {
-                    amountClaimed = volumeFilled;
-                }
-            }
-
-            ItemData tempItem = isSellOrder ? new ItemData(name, fullPrice, ItemData.priceTypes.INSTABUY, totalVolume) : new ItemData(name, fullPrice, ItemData.priceTypes.INSTASELL, totalVolume);
-            tempItem.setMaximumRounding(0.0);
-
-            if(volumeFilled > -1)
-                tempItem.setFilled();
-            if(volumeFilled == totalVolume)
-                tempItem.setFilled();
-            if(amountClaimed > -1)
-                tempItem.setAmountClaimed(amountClaimed);
-
-            //if updateWithItem() returns null addWatchedItem returns, so it is only called when no match is found
-            foundItems.add(tempItem);
-            Util.addWatchedItem(updateWithItem(tempItem));
-        }
-        removeOldItems(foundItems);
-        ItemData.update();
-    }
-
-    private static void removeOldItems(List<ItemData> foundItems){
-        List<ItemData> itemsToRemove = new ArrayList<>();
-
-        for(ItemData item : BUConfig.get().watchedItems){
-            if(ItemData.findItem(item, foundItems) == null) {
-                itemsToRemove.add(item);
-            }
-        }
-
-        for(ItemData item : itemsToRemove) {
-            item.removeFromWatchedItems();
-            Util.notifyAll("Removed " + item.getGeneralInfo() + " from watched items.", Util.notificationTypes.ITEMDATA);
-        }
-
-        BUConfig.HANDLER.save();
-    }
-
-    private static ItemData updateWithItem(ItemData foundItem){
-        ItemData match = ItemData.findItem(foundItem, BUConfig.get().watchedItems);
-        if(match == null) {
-            Util.notifyAll("No match found", Util.notificationTypes.ITEMDATA);
-            return foundItem;
-        }
-
-        if (match.getMaximumRounding() != 0.0) {
-            Util.notifyAll("Updating maximum rounding of " + match.getName() + " from " + match.getMaximumRounding() + " to 0.0 . Price: " + foundItem.getPrice(), Util.notificationTypes.ITEMDATA);
-            match.setMaximumRounding(0.0);
-        }
-//        Util.notifyAll("Match found", Util.notificationTypes.ITEMDATA);
-        if(match.getPrice() != foundItem.getPrice()){
-            Util.notifyAll("Updating price of " + match.getName() + " from " + match.getPrice() + " to " + foundItem.getPrice(), Util.notificationTypes.ITEMDATA);
-            match.setPrice(foundItem.getPrice());
-        }
-        if(match.getStatus() != foundItem.getStatus()){
-            Util.notifyAll("Updating status of " + match.getName() + " from " + match.getStatus() + " to " + foundItem.getStatus(), Util.notificationTypes.ITEMDATA);
-            match.setStatus(foundItem.getStatus());
-        }
-        if(match.getAmountFilled() != foundItem.getAmountFilled()){
-            Util.notifyAll("Updating volume filled of " + match.getName() + " from " + match.getAmountFilled() + " to " + foundItem.getAmountFilled(), Util.notificationTypes.ITEMDATA);
-            match.setAmountFilled(foundItem.getAmountFilled());
-        }
-        if(match.getAmountClaimed() != foundItem.getAmountClaimed() && foundItem.getAmountClaimed() >= 0){
-            Util.notifyAll("Updating amount claimed of " + match.getName() + " from " + match.getAmountClaimed() + " to " + foundItem.getAmountClaimed(), Util.notificationTypes.ITEMDATA);
-            match.setAmountClaimed(foundItem.getAmountClaimed());
-        }
-        BUConfig.HANDLER.save();
-        return null;
-    }
-
-    //TODO  low priority -- there is definitely a better way to do this
-    private static ArrayList<ItemStack> findOrders(List<ItemStack> orderScreenStacks){
-            ArrayList<ItemStack> items = new ArrayList<>();
-            int lastBlackPaneIndex = -1, firstAfterIndex = -1;
-
-            for (int i = 0; i < orderScreenStacks.size(); i++) {
-                if (orderScreenStacks.get(i).isOf(Items.BLACK_STAINED_GLASS_PANE)) {
-                    lastBlackPaneIndex = i;
-                } else{
-                    break;
-                }
-            }
-
-            for (int i = lastBlackPaneIndex + 1; i < orderScreenStacks.size() - 2; i++) {
-                if (orderScreenStacks.get(i).isOf(Items.BLACK_STAINED_GLASS_PANE) && orderScreenStacks.get(i+1).isOf(Items.BLACK_STAINED_GLASS_PANE) && orderScreenStacks.get(i+2).isOf(Items.BLACK_STAINED_GLASS_PANE)) {
-                    firstAfterIndex = i;
-                    break;
-                }
-            }
-
-            if (firstAfterIndex == -1)
-                return items;
-
-            for (int i = lastBlackPaneIndex + 1; i < firstAfterIndex; i++) {
-                if(!orderScreenStacks.get(i).isOf(Items.BLACK_STAINED_GLASS_PANE))
-                    items.add(orderScreenStacks.get(i));
-            }
-
-            //if there are no items last index+1 will be arrow, so in that case it should return empty list
-            if(orderScreenStacks.get(lastBlackPaneIndex+1).isOf(Items.ARROW))
-                return new ArrayList<>();
-
-            return items;
-    }
+    /* ------------------------------------------------------------ */
+    /*  BUListener                                                  */
+    /* ------------------------------------------------------------ */
 
     @Override
     public void subscribe() {
-        eventBus.subscribe(this);
+        EVENT_BUS.subscribe(this);      // functional interface – no annotations needed
     }
+
+    /** Called from the (vanilla) ChestLoadedEvent mixin helper. */
+    @SuppressWarnings("unused")   // called via functional-interface registration
+    public void onChestLoaded(ChestLoadedEvent ev) {
+        if (!BazaarUtils.GUI.inBuyOrders()) return;
+
+        chestStacks  = ev.getItemStacks();
+        orderEntries = locateOrderItems(chestStacks);
+
+        updateWatchedItems(orderEntries);
+    }
+
+    /* ------------------------------------------------------------ */
+    /*  Main update routine                                         */
+    /* ------------------------------------------------------------ */
+
+    private void updateWatchedItems(List<ItemStack> orders) {
+        List<ItemData> found = new ArrayList<>();
+
+        for (ItemStack st : orders) {
+            if (st == null || !st.hasTagCompound()) continue;
+
+            ParsedOrder o = parseOrder(st);
+            if (o == null) continue;                     // malformed lore
+
+            /* Build a temporary ItemData mirroring the order’s info. */
+            ItemData tmp = new ItemData(
+                    o.name,
+                    o.unitPrice * o.totalVol,
+                    o.sellOrder ? ItemData.priceTypes.INSTABUY
+                                 : ItemData.priceTypes.INSTASELL,
+                    o.totalVol);
+            tmp.setMaximumRounding(0.0);                 // exact price now
+            if (o.filledVol >= 0) tmp.setAmountFilled(o.filledVol);
+            if (o.claimedVol >= 0) tmp.setAmountClaimed(o.claimedVol);
+            if (o.filledVol == o.totalVol) tmp.setStatus(ItemData.statuses.FILLED);
+
+            /* Try to merge with existing watch-list entry. */
+            ItemData existing = ItemData.findItem(tmp, BUConfig.get().watchedItems);
+            if (existing == null) {
+                Util.addWatchedItem(tmp);                // new entry
+            } else {
+                sync(existing, tmp);                     // update fields
+            }
+            found.add(tmp);
+        }
+
+        /* Remove watch-list items that are no longer present */
+        purgeMissing(found);
+
+        BUConfig.HANDLER.save();
+        ItemData.update();
+    }
+
+    /* Copy changed fields existing ← fresh */
+    private static void sync(ItemData ex, ItemData nu) {
+        if (ex.getPrice()         != nu.getPrice())         ex.setPrice(nu.getPrice());
+        if (ex.getStatus()        != nu.getStatus())        ex.setStatus(nu.getStatus());
+        if (ex.getAmountFilled()  != nu.getAmountFilled())  ex.setAmountFilled(nu.getAmountFilled());
+        if (ex.getAmountClaimed() != nu.getAmountClaimed()) ex.setAmountClaimed(nu.getAmountClaimed());
+        if (ex.getMaximumRounding()!= 0.0)                  ex.setMaximumRounding(0.0);
+    }
+
+    /* Remove items the GUI no longer shows */
+    private static void purgeMissing(List<ItemData> current) {
+        Iterator<ItemData> it = BUConfig.get().watchedItems.iterator();
+        while (it.hasNext()) {
+            ItemData w = it.next();
+            if (ItemData.findItem(w, current) == null) {
+                it.remove();
+                Util.notifyAll("Removed " + w.getGeneralInfo(), Util.notificationTypes.ITEMDATA);
+            }
+        }
+    }
+
+    /* ------------------------------------------------------------ */
+    /*  Helper – locate order slots between black-pane separators   */
+    /* ------------------------------------------------------------ */
+
+    private static boolean isBlackPane(ItemStack s) {
+        return s != null
+                && s.getItem() == Item.getItemFromBlock(Blocks.stained_glass_pane)
+                && s.getMetadata() == 15;                 // colour id for black
+    }
+
+    private static List<ItemStack> locateOrderItems(List<ItemStack> slots) {
+        int first = -1, last = -1;
+
+        /* Skip initial black panes */
+        int idx = 0;
+        while (idx < slots.size() && isBlackPane(slots.get(idx))) idx++;
+        first = idx;
+
+        /* Find triple-pane terminator */
+        while (idx + 2 < slots.size()) {
+            if (isBlackPane(slots.get(idx)) &&
+                isBlackPane(slots.get(idx + 1)) &&
+                isBlackPane(slots.get(idx + 2))) {
+                last = idx;
+                break;
+            }
+            idx++;
+        }
+        if (first < 0 || last < 0 || first >= last) return new ArrayList<>();
+
+        List<ItemStack> out = new ArrayList<>();
+        for (int i = first; i < last; i++)
+            if (!isBlackPane(slots.get(i)))
+                out.add(slots.get(i));
+
+        /* If very first slot is an arrow ➜ the page is empty */
+        if (!out.isEmpty() && out.get(0).getItem() == Items.arrow) out.clear();
+        return out;
+    }
+
+    /* ------------------------------------------------------------ */
+    /*  Lore-parsing helpers                                         */
+    /* ------------------------------------------------------------ */
+
+    private static final class ParsedOrder {
+        String  name = "";
+        boolean sellOrder;
+        double  unitPrice;
+        int     totalVol   = 0;
+        int     filledVol  = -1;    // -1 = not filled yet
+        int     claimedVol = -1;
+    }
+
+    /** Extract all useful information from the Lore of one order-item. */
+    private static ParsedOrder parseOrder(ItemStack stack) {
+        ParsedOrder po = new ParsedOrder();
+
+        /* ---------- display name ---------- */
+        String disp = stack.getDisplayName().replaceAll("§.", "");
+        if (disp.startsWith("BUY "))  { po.sellOrder = false; po.name = disp.substring(4); }
+        if (disp.startsWith("SELL ")) { po.sellOrder = true;  po.name = disp.substring(5); }
+
+        /* ---------- lore lines ---------- */
+        List<String> lore = getLoreLines(stack);
+
+        // volume / price
+        if (lore.size() >= 3) {
+            String volStr = strip(lore.get(2));     // “   128x  ”
+            try { po.totalVol = Util.parseNumber(volStr); } catch (Exception ignored) {}
+        }
+
+        // per-unit price
+        for (String l : lore)
+            if (l.contains("per unit")) {
+                po.unitPrice = Double.parseDouble(Util.extractTextAfterWord(l, "unit:")
+                                                        .replace(",", "").trim());
+                break;
+            }
+
+        // filled / claimed
+        for (String l : lore) {
+            String s = strip(l);
+            if (s.startsWith("Filled")) {                   // “Filled: 64/128”
+                int slash = s.indexOf('/');
+                if (slash > 0) {
+                    po.filledVol = Util.parseNumber(s.substring(8, slash));
+                    // totalVol was set already
+                }
+            }
+            if (s.contains("to claim")) {                   // “… 3200 coins to claim!”
+                String num = s.substring(9, s.indexOf(' ')).replace(",", "");
+                try { po.claimedVol = Integer.parseInt(num); } catch (Exception ignored) {}
+            }
+        }
+        return po;
+    }
+
+    /* Grab lore → List<String> (colour codes stripped) */
+    private static List<String> getLoreLines(ItemStack st) {
+        List<String> out = new ArrayList<>();
+        if (!st.hasTagCompound()) return out;
+
+        NBTTagCompound root = st.getTagCompound();
+        if (root == null || !root.hasKey("display")) return out;
+
+        NBTTagCompound disp = root.getCompoundTag("display");
+        if (!disp.hasKey("Lore")) return out;
+
+        for (int i = 0; i < disp.getTagList("Lore", 8 /*String*/).tagCount(); i++) {
+            String s = disp.getTagList("Lore", 8).getStringTagAt(i)
+                           .replace("§", "");
+            out.add(s);
+        }
+        return out;
+    }
+
+    private static String strip(String s) { return s.replace("§", ""); }
 }
