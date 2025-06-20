@@ -6,13 +6,13 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
 /**
- * Simple accessor that exposes the protected {@code mc} field of {@link GuiScreen}.
- * Only needed by legacy helpers; no Fabric classes involved.
+ * Exposes the protected {@code mc} field of {@link GuiScreen}.
+ * Pure-vanilla (Forge 1.8.9) – no Fabric classes here.
  */
 @Mixin(GuiScreen.class)
 public interface AccessorGuiScreen {
 
-    /** Vanilla 1.8.9 field name is {@code mc}. */
+    /* field name is exactly “mc” in 1.8.9 */
     @Accessor("mc")
     Minecraft getMinecraft();
 }
