@@ -18,305 +18,342 @@ import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
 
-
-//TODO figure out how to handle rounding with price
-//TODO use last viewed item in bazaar to help with finding accurate price instead of just chat message
+/**
+ * Represents a *single* watched item (or order) in Bazaar-Utils.
+ */
 @Slf4j
 public class ItemData {
-    public String getProductID() {
-        return productId;
-    }
 
-    @Getter
-    private final String name;
-    private final String productId;
+    /* ──────────────────────────────────────────────────────────────────
+       ENUMS
+       ────────────────────────────────────────────────────────────────── */
 
-    public int getIndex(){return BUConfig.get().watchedItems.indexOf(this);}
+    /** BUY-order ⇄ SELL-order discriminator */
+    public enum PriceType {
+        INSTASELL,   // we placed an insta-sell ⇒ we own items, selling to a buy-order
+        INSTABUY;    // we placed an insta-buy  ⇒ we pay instantly, receiving items
 
-    public String getGeneralInfo(){
-        String str = "(name: " + name + "[" + getIndex() + "]" + ", price:" + price + ", volume: " + volume;
-        if(amountClaimed != 0)
-            str += ", amount claimed: " + amountClaimed;
-        str += ", type: " + priceType;
-        if(status == statuses.FILLED)
-            str += ", status: " + status;
-        str +=  ")";
-        return str;
-    }
+        private PriceType opposite;
 
-    @Getter
-    public enum priceTypes{INSTASELL,INSTABUY;
-        private priceTypes opposite;
         static {
             INSTASELL.opposite = INSTABUY;
-            INSTABUY.opposite = INSTASELL;
+            INSTABUY.opposite  = INSTASELL;
         }
-        public String getString(){
-   switch (this) {
-    case INSTASELL: return "buy order";
-    case INSTABUY:  return "sell order";
-    default:        return "order";
-}
-    public enum statuses{SET,FILLED}
 
-    //insta sell and insta buy
-    @Setter
-    @Getter
-    private double price;
-    @Setter
-    @Getter
-    private priceTypes priceType;
-    //the sell or buy price of lowest/highest offer
-    @Getter
-    private double marketPrice;
-    //the price of the opposite type of order
+        /** @return the opposite side of the market (buy ↔ sell) */
+        public PriceType getOpposite() { return opposite; }
+
+        /** Human-readable name used in chat messages */
+        public String getString() {
+            return (this == INSTASELL) ? "buy order" : "sell order";
+        }
+    }
+
+    /** Per-order state machine */
+    public enum Status { SET, FILLED }
+
+    /* ──────────────────────────────────────────────────────────────────
+       BASIC DATA
+       ────────────────────────────────────────────────────────────────── */
+
+    @Getter private final String  name;
+    @Getter private final String  productId;      // internal Bazaar ID
+    @Getter private final int     volume;
+
+    @Getter @Setter private double     price;     // unit price we placed
+    @Getter @Setter private PriceType  priceType; // insta-buy or insta-sell
+    @Getter @Setter private Status     status;
+
+    /** Lowest opposite-side price – used for flip suggestions */
     private double marketOppositePrice;
-    @Setter
-    @Getter
-    private statuses status;
-    @Getter
-    private final int volume;
+    /** Current best price on *our* side of the market */
+    @Getter private double marketPrice;
 
-    @Setter
-    @Getter
-    private int amountClaimed = 0;
-    @Setter
-    @Getter
-    private int amountFilled = 0;
-    @Getter @Setter
-    private double maximumRounding;
+    /* ────────── misc bookkeeping ────────── */
+    @Getter @Setter private int    amountClaimed  = 0;
+    @Getter @Setter private int    amountFilled   = 0;
+    @Getter @Setter private double maximumRounding;
 
-    @Getter
-    private static List<ItemData> outdated = new ArrayList<>(Collections.emptyList());
+    /* ────────────────────────────────────────────────────────────────── */
 
-//    @Param fullPrice is the price per unit * volume
-    //When finding item price, it can round to the nearest coin sometimes, so maximumRounding is used to determine if the price is similar enough to be considered a match
-    public ItemData(String name, Double fullPrice, priceTypes priceType, int volume) {
-        this.name = name;
-        this.priceType = priceType;
-        this.productId = BazaarData.findProductId(name);
-        this.volume = volume;
-        this.price = fullPrice/volume;
-        price = (double) Math.round(price * 100) / 100;
-        this.status = statuses.SET;
-        this.maximumRounding = getMaxRounding(fullPrice, volume);
+    /** Thread-safe list containing the *current* outdated orders */
+    @Getter private static final List<ItemData> outdated =
+            new ArrayList<>();
 
-        if(productId == null){
-            Util.notifyAll("Could not find product id for item: " + name, Util.notificationTypes.ITEMDATA);
+    /* ──────────────────────────────────────────────────────────────────
+       CTOR
+       ────────────────────────────────────────────────────────────────── */
+
+    public ItemData(String name,
+                    double fullPrice,          // coin total = unit × volume
+                    PriceType priceType,
+                    int volume) {
+
+        this.name       = name;
+        this.priceType  = priceType;
+        this.productId  = BazaarData.findProductId(name);
+        this.volume     = volume;
+        this.price      = Math.round((fullPrice / volume) * 100) / 100.0;
+        this.status     = Status.SET;
+        this.maximumRounding = calcMaxRounding(fullPrice, volume);
+
+        if (productId == null) {
+            Util.notifyAll("Could not find product id for item: " + name,
+                           Util.notificationTypes.ITEMDATA);
         }
     }
 
-    private static double getMaxRounding(double fullPrice, int volume){
-        if(fullPrice < 10000)
-            return 0;
-        else{
-            return (Math.ceil((.9 / volume) * 10))/10;
-        }
+    /* ──────────────────────────────────────────────────────────────────
+       SMALL HELPERS
+       ────────────────────────────────────────────────────────────────── */
+
+    /** Index inside BUConfig list – useful for chat debug messages */
+    public int getIndex() {
+        return BUConfig.get().watchedItems.indexOf(this);
     }
 
+    /** Compact human-readable description – only for debugging */
+    public String getGeneralInfo() {
+        StringBuilder sb = new StringBuilder("(name: ")
+                .append(name).append("[").append(getIndex()).append("]")
+                .append(", price: ").append(price)
+                .append(", volume: ").append(volume);
 
-    public static void update(){
+        if (amountClaimed != 0) sb.append(", amount claimed: ").append(amountClaimed);
+        sb.append(", type: ").append(priceType);
+        if (status == Status.FILLED) sb.append(", status: FILLED");
+        sb.append(")");
+        return sb.toString();
+    }
+
+    private static double calcMaxRounding(double fullPrice, int volume) {
+        // small orders rarely suffer rounding issues
+        return (fullPrice < 10_000)
+                ? 0
+                : Math.ceil((0.9 / volume) * 10) / 10.0;
+    }
+
+    /** True when a given chat/GUI price is within rounding tolerance */
+    public boolean isSimilarPrice(double other) {
+        return Math.abs(price - other) <= maximumRounding;
+    }
+
+    /* ──────────────────────────────────────────────────────────────────
+       STATIC UPDATE HELPERS
+       ────────────────────────────────────────────────────────────────── */
+
+    public static void update() {
         updateMarketPrices();
         findOutdated();
     }
 
-    private static void updateMarketPrices(){
-        for(ItemData item: BUConfig.get().watchedItems) {
-            double oldPrice = item.marketPrice;
-            item.marketPrice = Util.getPrettyNumber(BazaarData.findItemPrice(item.productId, item.priceType));
-            item.marketOppositePrice = Util.getPrettyNumber(BazaarData.findItemPrice(item.productId, item.priceType.getOpposite()));
-            if(oldPrice != item.marketPrice)
-                Util.notifyAll(item.getGeneralInfo() + " has new market price: " + item.getMarketPrice(), Util.notificationTypes.BAZAARDATA);
+    private static void updateMarketPrices() {
+        for (ItemData item : BUConfig.get().watchedItems) {
+            double old = item.marketPrice;
+            item.marketPrice = Util.getPrettyNumber(
+                    BazaarData.findItemPrice(item.productId, item.priceType));
+            item.marketOppositePrice = Util.getPrettyNumber(
+                    BazaarData.findItemPrice(item.productId,
+                                             item.priceType.getOpposite()));
+
+            if (old != item.marketPrice) {
+                Util.notifyAll(item.getGeneralInfo() +
+                               " has new market price: " + item.marketPrice,
+                               Util.notificationTypes.BAZAARDATA);
+            }
         }
     }
 
-    public void flipItem(double newPrice){
-        this.priceType = this.priceType.getOpposite();
-        this.price = newPrice;
+    /* ──────────────────────────────────────────────────────────────────
+       MUTATORS
+       ────────────────────────────────────────────────────────────────── */
+
+    /** Flip an order to the opposite side at a new price */
+    public void flipItem(double newUnitPrice) {
+        this.priceType = priceType.getOpposite();
+        this.price     = newUnitPrice;
         this.amountFilled = 0;
-        this.status = statuses.SET;
+        this.status    = Status.SET;
     }
 
-    //TODO some error with maximum rounding or finding the price. either finding price can round down by .1 accidentally or maximum rounding calculation is wrong
-    public boolean isSimilarPrice(double price) {
-        return Math.abs(getPrice() - price) <= maximumRounding;
+    /** Mark order as completely filled */
+    public void setFilled() {
+        this.amountFilled = volume;
+        this.status       = Status.FILLED;
     }
 
-    //run by ex: getVariables((item) -> item.getPrice()) orItemData.getVariables(ItemData::getPrice);
-    public static <T> ArrayList<T> getVariables(Function<ItemData, T> variable){
-        ArrayList<T> variables = new ArrayList<>();
-        for(ItemData item : BUConfig.get().watchedItems){
-            variables.add(variable.apply(item));
+    /* ──────────────────────────────────────────────────────────────────
+       PRICE / MATCHING HELPERS
+       ────────────────────────────────────────────────────────────────── */
+
+    public double getFlipPrice() {
+        updateMarketPrices(); // refresh once
+        if (marketOppositePrice == 0) return 0;
+
+        return (priceType == PriceType.INSTABUY)
+                ? marketOppositePrice + 0.1
+                : marketOppositePrice - 0.1;
+    }
+
+    public boolean isOutdated() {
+        if (status == Status.FILLED) return false;
+
+        if (priceType == PriceType.INSTABUY) {
+            return price - maximumRounding > marketPrice;
+        } else { // INSTASELL
+            return price + maximumRounding < marketPrice;
         }
-        return variables;
     }
 
-    //TODO refactor of match finding -- it can definitely be improved
-    private static ArrayList<ItemData> findExactMatches(String name, Double price, Integer volume, priceTypes priceType){
-        ArrayList<ItemData> itemList = new ArrayList<>();
-        for(ItemData item : BUConfig.get().watchedItems){
-            if((price == null || item.isSimilarPrice(price)) &&
-                    (volume == null || Math.abs(item.getVolume() - volume) <= (0.05 * volume)) &&
-                    (name == null || name.equalsIgnoreCase(item.getName())) &&
-                    (priceType == null || priceType == item.getPriceType())){
-                itemList.add(item);
-            }
+    /* ──────────────────────────────────────────────────────────────────
+       FIND/SEARCH HELPERS
+       ────────────────────────────────────────────────────────────────── */
+
+    public static <T> List<T> getVariables(Function<ItemData, T> fn) {
+        List<T> list = new ArrayList<>(BUConfig.get().watchedItems.size());
+        BUConfig.get().watchedItems.forEach(item -> list.add(fn.apply(item)));
+        return list;
+    }
+
+    private static List<ItemData> findExactMatches(String name,
+                                                   Double price,
+                                                   Integer volume,
+                                                   PriceType type) {
+        List<ItemData> out = new ArrayList<>();
+        for (ItemData item : BUConfig.get().watchedItems) {
+            if ((price   == null || item.isSimilarPrice(price)) &&
+                (volume  == null || Math.abs(item.volume - volume) <= 0.05 * volume) &&
+                (name    == null || name.equalsIgnoreCase(item.name)) &&
+                (type    == null || type == item.priceType))
+                out.add(item);
         }
-        return itemList;
+        return out;
     }
-    private static ArrayList<ItemData> findLooseVolumeMatches(String name, Double price, Integer volume, priceTypes priceType){
-        ArrayList<ItemData> itemList = new ArrayList<>();
-        for(ItemData item : BUConfig.get().watchedItems){
-            if((price == null || item.isSimilarPrice(price)) &&
-                    (volume == null || Math.abs(item.getVolume() - volume) <= (0.05 * volume) || Math.abs(item.getVolume()-item.getAmountClaimed() - volume) <= (0.05 * volume)) &&
-                    (name == null || name.equalsIgnoreCase(item.getName())) &&
-                    (priceType == null || priceType == item.getPriceType())){
-                itemList.add(item);
-            }
+
+    private static List<ItemData> findLooseVolumeMatches(String name,
+                                                         Double price,
+                                                         Integer volume,
+                                                         PriceType type) {
+        List<ItemData> out = new ArrayList<>();
+        for (ItemData item : BUConfig.get().watchedItems) {
+            boolean volumeClose =
+                    volume == null ||
+                    Math.abs(item.volume - volume) <= 0.05 * volume ||
+                    Math.abs(item.volume - item.amountClaimed - volume) <= 0.05 * volume;
+
+            if ((price == null || item.isSimilarPrice(price)) &&
+                volumeClose &&
+                (name == null || name.equalsIgnoreCase(item.name)) &&
+                (type == null || type == item.priceType))
+                out.add(item);
         }
-        return itemList;
+        return out;
     }
 
-    public static ItemData findItem(String name, Double price, Integer volume, priceTypes priceType) {
-        ArrayList<ItemData> itemList = findExactMatches(name, price, volume, priceType);
-        if(itemList.isEmpty())
-            itemList = findLooseVolumeMatches(name, price, volume, priceType);
+    /** Find the *best* matching item in the current watch-list */
+    public static ItemData findItem(String name,
+                                    Double price,
+                                    Integer volume,
+                                    PriceType type) {
 
-        if (itemList.isEmpty()) {
-            Util.notifyAll("Could not find item with info: [name: " + name + ", price: " + price + ", volume: " + volume + "]", Util.notificationTypes.ITEMDATA);
+        List<ItemData> matches = findExactMatches(name, price, volume, type);
+        if (matches.isEmpty())
+            matches = findLooseVolumeMatches(name, price, volume, type);
+
+        if (matches.isEmpty()) {
+            Util.notifyAll("Could not find item with info: [name: " + name +
+                           ", price: " + price + ", volume: " + volume + "]",
+                           Util.notificationTypes.ITEMDATA);
             return null;
         }
-        if (itemList.size() > 1) {
-            ItemData bestMatch = itemList.getFirst();
-            for (ItemData duplicate : itemList) {
-                Util.notifyAll("Duplicate item: " + duplicate.getGeneralInfo(), Util.notificationTypes.ITEMDATA);
-                if (volume == null) {
-                    continue;
-                }
-                if (Math.abs(duplicate.getVolume() - volume) < Math.abs(bestMatch.getVolume() - volume)) {
-                    bestMatch = duplicate;
-                }
-            }
-            return bestMatch;
-        }
+        if (matches.size() == 1) return matches.getFirst();
 
-        return itemList.getFirst();
+        /* multiple matches → choose the closest volume */
+        ItemData best = matches.getFirst();
+        for (ItemData d : matches) {
+            Util.notifyAll("Duplicate item: " + d.getGeneralInfo(),
+                           Util.notificationTypes.ITEMDATA);
+            if (volume != null &&
+                Math.abs(d.volume - volume) < Math.abs(best.volume - volume))
+                best = d;
+        }
+        return best;
     }
-    public static ItemData findItem(ItemData matchingItem, List<ItemData> list) {
-        String name = matchingItem.getName();
-        double price = matchingItem.getPrice();
-        int volume = matchingItem.getVolume();
-        ItemData.priceTypes priceType = matchingItem.getPriceType();
-        ArrayList<ItemData> itemList = new ArrayList<>();
-        for(ItemData item : list){
-            if(item.isSimilarPrice(price) &&
-                    item.getVolume() == volume &&
-                    name.equalsIgnoreCase(item.getName()) &&
-                    priceType == item.getPriceType()){
-                itemList.add(item);
-            }
-        }
-        if (itemList.isEmpty()) {
-            return null;
-        }
-        if (itemList.size() > 1) {
-            itemList.forEach(duplicate -> {
-                Util.notifyAll("Duplicate item: " + duplicate.getGeneralInfo(), Util.notificationTypes.ITEMDATA);
-            });
-        }
-        return itemList.getFirst();
+
+    /** Search *within an arbitrary list* */
+    public static ItemData findItem(ItemData probe, List<ItemData> list) {
+        return list.stream()
+                   .filter(d ->
+                       d.isSimilarPrice(probe.price) &&
+                       d.volume == probe.volume &&
+                       d.name.equalsIgnoreCase(probe.name) &&
+                       d.priceType == probe.priceType)
+                   .findFirst()
+                   .orElse(null);
     }
+
+    /* ──────────────────────────────────────────────────────────────────
+       OUTDATED-ITEM HANDLING
+       ────────────────────────────────────────────────────────────────── */
 
     private static void findOutdated() {
-        List<ItemData> previousOutdatedItems = new ArrayList<>(outdated);
+        List<ItemData> previous = new ArrayList<>(outdated);
         outdated.clear();
-        for (ItemData item : BUConfig.get().watchedItems) {
-            if (item.isOutdated()) {
-                outdated.add(item);
-            }
-        }
 
-        if (outdated.isEmpty()) {
-            Util.notifyAll("No outdated items found.", Util.notificationTypes.ITEMDATA);
-            return;
-        }
+        /* rebuild list */
+        BUConfig.get().watchedItems.stream()
+                .filter(ItemData::isOutdated)
+                .forEach(outdated::add);
 
-        List<ItemData> availableOldOutdated = new ArrayList<>(previousOutdatedItems);
+        if (outdated.isEmpty()) return;
 
-        for (ItemData currentNewOutdatedItem : outdated) {
-            boolean foundMatchInOldList = false;
-            ItemData matchedOldItem = null;
+        List<ItemData> stillOutdated = new ArrayList<>(previous);
 
-            for (ItemData oldItem : availableOldOutdated) {
-                if (currentNewOutdatedItem.getName().equals(oldItem.getName()) &&
-                        Math.abs(currentNewOutdatedItem.getPrice() - oldItem.getPrice()) <= currentNewOutdatedItem.maximumRounding &&
-                        currentNewOutdatedItem.getVolume() == oldItem.getVolume() &&
-                        currentNewOutdatedItem.getPriceType() == oldItem.getPriceType()) {
-                    foundMatchInOldList = true;
-                    matchedOldItem = oldItem;
-                    break;
-                }
-            }
-
-            if (foundMatchInOldList) {
-                availableOldOutdated.remove(matchedOldItem);
+        for (ItemData nowOutdated : outdated) {
+            ItemData match = findItem(nowOutdated, stillOutdated);
+            if (match != null) {
+                stillOutdated.remove(match); // already reported earlier
             } else {
-                BazaarUtils.eventBus.post(new OutdatedItemEvent(currentNewOutdatedItem));
+                // new outdated item → fire event
+                BazaarUtils.eventBus.post(new OutdatedItemEvent(nowOutdated));
             }
         }
 
-        for (ItemData noLongerOutdatedItem : availableOldOutdated) {
-            if (BUConfig.get().watchedItems.contains(noLongerOutdatedItem) && noLongerOutdatedItem.getStatus() != statuses.FILLED) {
-                Text amount = Text.literal(noLongerOutdatedItem.getVolume() + "x ").formatted(Formatting.BOLD).formatted(Formatting.DARK_PURPLE);
-                Text itemName = Text.literal(noLongerOutdatedItem.getName().formatted(Formatting.BOLD).formatted(Formatting.GOLD));
-                MutableText message = Text.literal("[Bazaar Utils] ").formatted(Formatting.GOLD)
-                        .append(Text.literal("Your " + noLongerOutdatedItem.getPriceType().getString() + " for ").formatted(Formatting.WHITE))
-                        .append(amount)
-                        .append(itemName)
-                        .append(Text.literal( " is no longer outdated.").formatted(Formatting.WHITE));
-                if(MinecraftClient.getInstance().player != null)
-                    MinecraftClient.getInstance().player.sendMessage(message, false);
-                else
-                    Util.notifyError("Could not send no longer outdated notif because player is null.", null);
+        /* items that disappeared from ‘outdated’ list */
+        for (ItemData recovered : stillOutdated) {
+            if (BUConfig.get().watchedItems.contains(recovered) &&
+                recovered.status != Status.FILLED) {
+
+                Text msg = Text.literal("[Bazaar Utils] ").formatted(Formatting.GOLD)
+                        .append(Text.literal("Your " + recovered.priceType.getString() +
+                                " for ").formatted(Formatting.WHITE))
+                        .append(Text.literal(recovered.volume + "x ")
+                                .formatted(Formatting.BOLD, Formatting.DARK_PURPLE))
+                        .append(Text.literal(recovered.name)
+                                .formatted(Formatting.BOLD, Formatting.GOLD))
+                        .append(Text.literal(" is no longer outdated.")
+                                .formatted(Formatting.WHITE));
+
+                MinecraftClient client = MinecraftClient.getInstance();
+                if (client.player != null) client.player.sendMessage(msg, false);
             }
         }
-
     }
 
-    private boolean isOutdated(){
-        if(status == statuses.FILLED)
-            return false;
-        if (priceType == priceTypes.INSTABUY) {
-            return this.price-maximumRounding > this.marketPrice;
-        } else {
-            return this.price+maximumRounding < this.marketPrice;
-        }
-    }
+    /* ──────────────────────────────────────────────────────────────────
+       UTILITIES
+       ────────────────────────────────────────────────────────────────── */
 
-    public double getFlipPrice(){
-        updateMarketPrices();
-        if(marketOppositePrice == 0)
-            return 0;
-        if (priceType == priceTypes.INSTABUY) {
-            return (marketOppositePrice + .1);
-        } else {
-            return (marketOppositePrice - .1);
-        }
-    }
-
-    public void setFilled(){
-        amountFilled = volume;
-        status = statuses.FILLED;
-    }
-
-    public static void removeFromWatchedItems(ItemData item){
-        BUConfig.get().watchedItems.remove(item);
+    /** Remove this item from the watched-list and persist the config */
+    public void removeFromWatchedItems() {
+        BUConfig.get().watchedItems.remove(this);
         BUConfig.HANDLER.save();
         ItemData.update();
     }
-    public void removeFromWatchedItems(){
-        if(!BUConfig.get().watchedItems.remove(this))
-            Util.notifyAll("Error removing " + name + " from watched items. Item couldn't be found.");
+
+    /** Static helper for external classes */
+    public static void removeFromWatchedItems(ItemData item) {
+        BUConfig.get().watchedItems.remove(item);
         BUConfig.HANDLER.save();
         ItemData.update();
     }
