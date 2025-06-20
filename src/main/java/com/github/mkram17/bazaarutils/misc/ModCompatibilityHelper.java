@@ -2,154 +2,156 @@ package com.github.mkram17.bazaarutils.misc;
 
 import com.github.mkram17.bazaarutils.utils.Util;
 import com.google.gson.*;
-import de.hysky.skyblocker.config.SkyblockerConfig;
-import de.hysky.skyblocker.config.SkyblockerConfigManager;
-import lombok.Getter;
-import net.fabricmc.loader.api.FabricLoader;
+import net.minecraftforge.fml.common.Loader;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-public class ModCompatibilityHelper {
-    private static final String REI_MOD_ID = "roughlyenoughitems";
-    private static final String SKYBLOCKER_MOD_ID = "skyblocker";
-    private static final String REI_CONFIG_FILENAME = "roughlyenoughitems/config.json5";
-    private static final String REI_CONFIG_SECTION = "appearance";
-    private static final String REI_CONFIG_FIELD = "horizontalEntriesBoundariesColumns";
-    private static final int HORIZONTALENTRIESBOUNDARIESCOLUMS_VALUE = 16;
-    public static final String AMECS_MODID = "amecs-reborn";
-    public static final String FIRMAMENT_MODID = "firmament";
-    @Getter
-    private static boolean amecsReborn = false;
+/**
+ * Tiny, self-contained “shim” that tries to inter-operate with a few
+ * popular client-side mods – but **never** declares a hard compile-time
+ * dependency on them.  
+ * <p>
+ * Everything is done either via:
+ * <ul>
+ *   <li>{@code Loader.isModLoaded(...)} – Forge’s runtime check</li>
+ *   <li>plain Java reflection (catching <em>NoClassDefFoundError</em>
+ *       and <em>ReflectiveOperationException</em>)</li>
+ * </ul>
+ * so the whole class is 100 % optional on non-modded installs and will
+ * happily no-op when a target mod is missing.
+ */
+public final class ModCompatibilityHelper {
 
-    private static final Gson GSON_WRITER = new GsonBuilder().setPrettyPrinting().create();
+    /* ────────────────────────── target mod-ids ────────────────────────── */
 
-    public static void initializePatches(){
-        if (FabricLoader.getInstance().isModLoaded(REI_MOD_ID)) {
-            Util.notifyAll("Bazaar utils: REI detected. Attempting to modify REI config.");
-            modifyReiConfigWithGson();
+    private static final String MOD_REI        = "roughlyenoughitems";
+    private static final String MOD_SKYBLOCKER = "skyblocker";
+    private static final String MOD_AMECS      = "amecs-reborn";
+
+    /* ────────────────────────── misc constants  ───────────────────────── */
+
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
+    private static final String REI_CFG_FILE =
+            "config/roughlyenoughitems/config.json5";                 // relative to .minecraft
+
+    private static final String REI_APPEARANCE     = "appearance";
+    private static final String REI_BOUNDS_COLUMNS = "horizontalEntriesBoundariesColumns";
+    private static final int    REI_BOUNDS_VALUE   = 16;
+
+    /* ────────────────────────── public flags     ───────────────────────── */
+
+    /** <b>true</b> iff Amecs-Reborn is present (set during init). */
+    public static boolean AMECS_PRESENT = false;
+
+    /* ────────────────────────── one-shot initialiser ───────────────────── */
+
+    public static void init() {
+
+        /* 1) REI – patch one JSON value to a saner default */
+        if (Loader.isModLoaded(MOD_REI)) {
+            Util.notifyAll("REI detected – patching its config", Util.NotificationType.FEATURE);
+            patchReiConfig();
         }
-        if(FabricLoader.getInstance().isModLoaded(AMECS_MODID))
-            amecsReborn = true;
+
+        /* 2) Amecs-Reborn – remember presence for key-binding helpers */
+        AMECS_PRESENT = Loader.isModLoaded(MOD_AMECS);
+
+        /* 3) Skyblocker – nothing to do at launch; changes are done on demand */
     }
 
-    private static void modifyReiConfigWithGson() {
-        Path configDir = FabricLoader.getInstance().getConfigDir();
-        Path reiConfigFile = configDir.resolve(REI_CONFIG_FILENAME);
+    /* ────────────────────────── REI helper  ───────────────────────────── */
 
-        if (!Files.exists(reiConfigFile)) {
-            Util.notifyError("Could not find REI config file at: " + reiConfigFile, null);
+    private static void patchReiConfig() {
+        File  mcDir   = net.minecraftforge.fml.common.FMLCommonHandler.instance()
+                              .getMinecraftServerInstance().getFile(".");
+        Path  cfgPath = mcDir.toPath().resolve(REI_CFG_FILE);
+
+        if (!Files.isRegularFile(cfgPath)) {
+            Util.notifyError("REI config not found at " + cfgPath, null);
             return;
         }
 
-        JsonObject rootObject = null;
-
-        try (BufferedReader reader = Files.newBufferedReader(reiConfigFile, StandardCharsets.UTF_8)) {
-            JsonElement rootElement = JsonParser.parseReader(reader);
-
-            if (rootElement.isJsonObject()) {
-                rootObject = rootElement.getAsJsonObject();
-            } else {
-                Util.notifyError("REI config root is not a JSON object: " + reiConfigFile, null);
-                return;
-            }
-
-        } catch (JsonSyntaxException e) {
-            Util.notifyError("Failed to parse REI config file (likely due to non-standard JSON5 features like comments that Gson couldn't handle, or actual syntax errors): " + reiConfigFile, e);
+        JsonObject root;
+        try (BufferedReader r = Files.newBufferedReader(cfgPath, StandardCharsets.UTF_8)) {
+            root = JsonParser.parseReader(r).getAsJsonObject();
+        } catch (Exception e) {
+            Util.notifyError("Cannot read REI config – JSON5 comments present?", e);
             return;
+        }
+
+        /* Drill down: appearance.horizontalEntriesBoundariesColumns = 16 */
+        if (root.has(REI_APPEARANCE) && root.get(REI_APPEARANCE).isJsonObject()) {
+            JsonObject appearance = root.getAsJsonObject(REI_APPEARANCE);
+            appearance.addProperty(REI_BOUNDS_COLUMNS, REI_BOUNDS_VALUE);
+            Util.notifyAll("Patched REI → " + REI_BOUNDS_COLUMNS + " = " + REI_BOUNDS_VALUE,
+                           Util.NotificationType.FEATURE);
+        } else {
+            Util.notifyError("Unexpected REI config layout – “appearance” missing", null);
+            return;
+        }
+
+        try (BufferedWriter w = Files.newBufferedWriter(cfgPath, StandardCharsets.UTF_8)) {
+            GSON.toJson(root, w);
         } catch (IOException e) {
-            Util.notifyError("Failed to read REI config file: " + reiConfigFile, e);
-            return;
+            Util.notifyError("Failed to write REI config", e);
         }
+    }
+
+    /* ────────────────────────── Skyblocker toggles ───────────────────── */
+
+    /**
+     * Temporarily **disable** Skyblocker’s Bazaar overlay (if present).
+     * Call again with {@link #enableSkyblockerBazaarOverlay()} afterwards.
+     *
+     * @return {@code true} if the flag was successfully changed or the
+     *         overlay was already off – {@code false} on errors.
+     */
+    public static boolean disableSkyblockerBazaarOverlay() {
+        return setSkyblockerBazaarOverlay(false);
+    }
+
+    /** Re-enable the overlay after a previous disable call. */
+    public static boolean enableSkyblockerBazaarOverlay() {
+        return setSkyblockerBazaarOverlay(true);
+    }
+
+    /* reflection-based flag toggle so we do not depend on Skyblocker at compile-time */
+    private static boolean setSkyblockerBazaarOverlay(boolean state) {
+        if (!Loader.isModLoaded(MOD_SKYBLOCKER)) return false;
 
         try {
-            if (rootObject != null && rootObject.has(REI_CONFIG_SECTION) && rootObject.get(REI_CONFIG_SECTION).isJsonObject()) {
-                JsonObject appearanceObject = rootObject.getAsJsonObject(REI_CONFIG_SECTION);
+            Class<?> mgrCls   = Class.forName("de.hysky.skyblocker.config.SkyblockerConfigManager");
+            Class<?> cfgCls   = Class.forName("de.hysky.skyblocker.config.SkyblockerConfig");
 
-                if (appearanceObject.has(REI_CONFIG_FIELD)) {
-                    JsonElement currentValue = appearanceObject.get(REI_CONFIG_FIELD);
-                    Util.notifyAll("Current REI value for '" + REI_CONFIG_SECTION + "." + REI_CONFIG_FIELD + "': " + currentValue, Util.notificationTypes.GUI);
-                } else {
-                    Util.notifyError("Key '" + REI_CONFIG_SECTION + "." + REI_CONFIG_FIELD + "' not found in REI config.", null);
-                }
+            Object   cfg      = mgrCls.getMethod("get").invoke(null);
+            Object   ui       = cfgCls.getField("uiAndVisuals").get(cfg);
+            Object   overlay  = ui.getClass().getField("searchOverlay").get(ui);
 
-                appearanceObject.addProperty(REI_CONFIG_FIELD, HORIZONTALENTRIESBOUNDARIESCOLUMS_VALUE);
-                Util.notifyAll("Set REI value for '" + REI_CONFIG_SECTION + "." + REI_CONFIG_FIELD + "' to: " + HORIZONTALENTRIESBOUNDARIESCOLUMS_VALUE, Util.notificationTypes.GUI);
+            java.lang.reflect.Field f = overlay.getClass().getField("enableBazaar");
+            boolean current = f.getBoolean(overlay);
 
-            } else {
-                Util.notifyError("REI config structure unexpected. Missing '" + REI_CONFIG_SECTION + "' object.", null);
-                return;
-            }
-        } catch (Exception e) {
-            Util.notifyError("Error modifying the JSON structure in memory.", e);
-            return;
-        }
+            if (current == state) return true;            // already desired value
+            f.setBoolean(overlay, state);
 
-        try (BufferedWriter writer = Files.newBufferedWriter(reiConfigFile, StandardCharsets.UTF_8)) {
-            GSON_WRITER.toJson(rootObject, writer);
-            Util.notifyAll("Successfully saved modified REI config (comments removed): " + reiConfigFile, Util.notificationTypes.GUI);
-        } catch (IOException e) {
-            Util.notifyError("Failed to write modified REI config file: " + reiConfigFile, e);
-        }
-    }
+            // persist
+            mgrCls.getMethod("update", java.util.function.Consumer.class)
+                  .invoke(null, (java.util.function.Consumer<Object>) (o) -> { /* already set */ });
 
-    //true == success, false == failure
-    public static boolean tryDisableSkyblockerBazaarOverlay() {
-        if (FabricLoader.getInstance().isModLoaded(SKYBLOCKER_MOD_ID)) {
-            try {
-                SkyblockerConfig skyblockerConfig = SkyblockerConfigManager.get();
-                boolean currentValue = skyblockerConfig.uiAndVisuals.searchOverlay.enableBazaar;
-                Util.notifyAll("Skyblocker Bazaar Overlay current state: " + currentValue, Util.notificationTypes.GUI);
-
-                if (currentValue) {
-                    //TODO test to make sure this works instead of .save()
-                    SkyblockerConfigManager.update((x) -> x.uiAndVisuals.searchOverlay.enableBazaar = false);
-                    Util.notifyAll("Attempting to disable Skyblocker Bazaar Overlay...", Util.notificationTypes.GUI);
-
-                    Util.notifyAll("Disabled Skyblocker Bazaar search overlay.", Util.notificationTypes.GUI);
-                    return true;
-                } else {
-                    Util.notifyAll("Skyblocker Bazaar Overlay already disabled.", Util.notificationTypes.GUI);
-                    return true;
-                }
-            } catch (NoClassDefFoundError | NoSuchFieldError | Exception e) {
-                Util.notifyError("Failed to access or modify Skyblocker config setting.", e);
-                return false;
-            }
-        } else {
-            System.out.println("Skyblocker not loaded, cannot change its config.");
+            return true;
+        } catch (Throwable t) {                           // NoClassDefFound, reflection etc.
+            Util.notifyError("Skyblocker overlay toggle failed", t);
             return false;
         }
     }
 
-    public static boolean tryEnableSkyblockerBazaarOverlay() {
-        if (FabricLoader.getInstance().isModLoaded(SKYBLOCKER_MOD_ID)) {
-            try {
-                SkyblockerConfig skyblockerConfig = SkyblockerConfigManager.get();
-                if (!skyblockerConfig.uiAndVisuals.searchOverlay.enableBazaar) {
-                    System.out.println("Attempting to enable Skyblocker Bazaar Overlay...");
-                    SkyblockerConfigManager.update((x) -> x.uiAndVisuals.searchOverlay.enableBazaar = true);
+    /* ────────────────────────── utility – no instantiation ───────────── */
 
-
-                    Util.notifyAll("Enabled Skyblocker Bazaar search overlay.", Util.notificationTypes.GUI);
-                    return true;
-                } else {
-                    System.out.println("Skyblocker Bazaar Overlay already enabled.");
-                    return true;
-                }
-
-            } catch (NoClassDefFoundError | NoSuchFieldError | Exception e) {
-                Util.notifyError("Failed to access or modify Skyblocker config setting (enable attempt).", e);
-                return false;
-            }
-        } else {
-            System.out.println("Skyblocker not loaded, cannot enable its config setting.");
-            return false;
-        }
-    }
-    
+    private ModCompatibilityHelper() {}
 }
