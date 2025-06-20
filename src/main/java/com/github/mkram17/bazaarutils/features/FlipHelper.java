@@ -8,199 +8,168 @@ import com.github.mkram17.bazaarutils.utils.GUIUtils;
 import com.github.mkram17.bazaarutils.utils.SoundUtil;
 import com.github.mkram17.bazaarutils.utils.Util;
 import net.minecraft.client.Minecraft;
+import net.minecraft.inventory.Slot;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.EnumChatFormatting;
-
-import static com.github.mkram17.bazaarutils.BazaarUtils.EVENT_BUS;
+import net.minecraftforge.common.MinecraftForge;
 
 /**
  * “Flip order” helper shown in the Bazaar order-options GUI.
- * <p>Works on Forge 1.8.9 without any Fabric, Lombok or YACL classes.</p>
+ * Pure Forge 1.8.9 – no Fabric, Lombok or YACL classes required.
  */
 public final class FlipHelper extends CustomItemButton implements BUListener {
 
-    /* ------------------------------------------------------------------ */
-    /*  Tunables & runtime state                                          */
-    /* ------------------------------------------------------------------ */
+    /* ────────────────────────── tunables / runtime ───────────────────────── */
     private boolean enabled;
     private final Item replaceItem;
 
-    private ItemData item;                 // matching watched-item
-    private boolean  waitingForSign    = false;
-    private boolean  inCancelDialogue  = false;
+    private ItemData item;                  // matching watched item
+    private boolean  waitingForSign = false;
+    private boolean  inCancelDlg   = false;
 
-    private double   flipPrice         = 0;
-    private double   orderPrice        = -1;
-    private int      orderVolFilled    = -1;
+    private double   flipPrice     = 0;     // coins per unit
+    private double   orderPrice    = -1;    // parsed from lore
+    private int      orderFilled   = -1;    // parsed from lore
 
-    /* ------------------------------------------------------------------ */
-    /*  Construction / config                                             */
-    /* ------------------------------------------------------------------ */
+    /* ────────────────────────── construction ─────────────────────────────── */
     public FlipHelper(boolean enabled, int slotNumber, Item pane) {
-        this.enabled     = enabled;
-        this.slotNumber  = slotNumber;
-        this.replaceItem = pane;
+        this.enabled    = enabled;
+        this.slotNumber = slotNumber;
+        this.replaceItem= pane;
 
-        EVENT_BUS.subscribe(this);
+        /* use Forge event-bus – BUListener.subscribe() hooks runtime bus */
+        MinecraftForge.EVENT_BUS.register(this);
     }
 
-    /* ------------------------------------------------------------- */
-    /*  Plain getters / setters (no Lombok)                         */
-    /* ------------------------------------------------------------- */
-    public boolean isEnabled()              { return enabled; }
-    public void    setEnabled(boolean b)    { enabled = b;    }
-    public Item    getReplaceItem()         { return replaceItem; }
+    /* ---------------------------------------------------------------------- */
+    /*  BUListener hook (no-op – registration done in ctor)                   */
+    /* ---------------------------------------------------------------------- */
+    @Override public void subscribe() { /* already on Forge bus */ }
 
-    /* ------------------------------------------------------------------ */
-    /*  Event-style callback registrations                                */
-    /* ------------------------------------------------------------------ */
-    @Override
-    public void subscribe() {
-        /* already subscribed in constructor */
-    }
-
-    /* ------------------------------------------------------------------ */
-    /*  Chest-load (GUI opened)                                           */
-    /* ------------------------------------------------------------------ */
+    /* ---------------------------------------------------------------------- */
+    /*  Chest finished loading → analyse GUI                                  */
+    /* ---------------------------------------------------------------------- */
     public void onChestLoaded(ChestLoadedEvent ev) {
-
         if (!enabled || !BazaarUtils.GUI.inFlipGui()) return;
 
-        inCancelDialogue = isCancelDialogue(ev);
+        inCancelDlg = isCancelDialogue(ev);          // confirm-cancel GUI?
 
-        /* find the “Flip Order” item inside the chest */
         item = findFlipItem(ev);
-        if (item != null) flipPrice = item.getFlipPrice();
+        if (item != null) {
+            /* flip price: 0.1 coin below best competitor on opposite side   */
+            flipPrice = Util.pretty(item.getMarketOppositePrice() - 0.1);
+        }
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Slot click inside flip GUI                                        */
-    /* ------------------------------------------------------------------ */
+    /* ---------------------------------------------------------------------- */
+    /*  Player clicked inside the flip-options GUI                            */
+    /* ---------------------------------------------------------------------- */
     public void onSlotClick(SlotClickEvent ev) {
-        if (!enabled ||
-            !BazaarUtils.GUI.inFlipGui() ||
-            ev.slot.getIndex() != slotNumber) return;
+        if (!enabled || !BazaarUtils.GUI.inFlipGui()) return;
 
-        SoundUtil.playSound(BUTTON_SOUND, BUTTON_VOLUME);
+        Slot s = ev.getSlot();
+        if (s == null || s.slotNumber != slotNumber) return;
 
-        /* click the sign (slot 15) to open it */
-        GUIUtils.clickSlot(15, 0);
+        SoundUtil.playSound("random.click", 0.5f);
+        GUIUtils.clickSlot(15, 0);                   // open sign (slot 15)
         waitingForSign = true;
-        ev.setCancelled(true);
+        ev.setCancelled(true);                       // block vanilla click
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Sign opened –- insert new price                                   */
-    /* ------------------------------------------------------------------ */
-    public void onSignOpen(SignOpenEvent e) {
-        if (!waitingForSign || item == null) return;
+    /* ---------------------------------------------------------------------- */
+    /*  Sign opened → fill in new under-cut price                             */
+    /* ---------------------------------------------------------------------- */
+    public void onSignOpen(SignOpenEvent ev) {
+        if (!waitingForSign || item == null || flipPrice <= 0) return;
         waitingForSign = false;
 
-        if (flipPrice == 0) return;                      // no competitor yet
-
-        String txt = Util.pretty(flipPrice) + "";
-        GUIUtils.setSignText(txt, true);
-
-        item.flip(flipPrice);
+        GUIUtils.setSignText(Double.toString(flipPrice), true);
+        item.flip(flipPrice);                        // update watched list
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Replace dummy button in the GUI                                   */
-    /* ------------------------------------------------------------------ */
+    /* ---------------------------------------------------------------------- */
+    /*  Replace the dummy glass-pane in slot <slotNumber>                      */
+    /* ---------------------------------------------------------------------- */
     public void onReplaceItem(ReplaceItemEvent ev) {
         if (ev.getSlotId() != slotNumber ||
             !enabled ||
             !BazaarUtils.GUI.inFlipGui() ||
-            inCancelDialogue) return;
+            inCancelDlg) return;
 
-        ItemStack stack = new ItemStack(replaceItem, 1);
+        ItemStack out = new ItemStack(replaceItem, 1);
 
-        String name;
-        String size;
-
+        String name, size;
         if (flipPrice == 0) {
-            name = EnumChatFormatting.DARK_PURPLE +
-                   "No competing sell offers";
+            name = EnumChatFormatting.DARK_PURPLE + "No competing sell offers";
             size = "ANY";
         } else if (item == null) {
             name = EnumChatFormatting.DARK_PURPLE + "Order not found";
             size = "???";
         } else {
             name = EnumChatFormatting.DARK_PURPLE +
-                   "Flip for " + Util.pretty(flipPrice) + " c";
+                   "Flip for " + Util.pretty(flipPrice) + " coins";
             size = Util.pretty(flipPrice) + "";
         }
 
-        stack.setStackDisplayName(name);
-        stack.setTagCompound(new net.minecraft.nbt.NBTTagCompound());
-        stack.getTagCompound().setString("bu_size", size);
+        out.setStackDisplayName(name);
+        out.setTagCompound(new net.minecraft.nbt.NBTTagCompound());
+        out.getTagCompound().setString("bu_size", size);
 
-        ev.setReplacement(stack);
+        ev.setReplacement(out);
     }
 
-    /* ================================================================== */
-    /*  Helper methods                                                    */
-    /* ================================================================== */
+    /* ====================================================================== */
+    /*  Helper methods                                                        */
+    /* ====================================================================== */
 
-    /** Parse the container looking for the “Flip Order” stack. */
+    /** Scan the chest for the “Flip Order” stack and match against watch-list. */
     private ItemData findFlipItem(ChestLoadedEvent ev) {
-
         for (ItemStack st : ev.getItemStacks()) {
             if (st == null) continue;
+            if (!st.getDisplayName().contains("Flip Order")) continue;
 
-            String name = st.getDisplayName();
-            if (!name.contains("Flip Order")) continue;
+            parseLore(st);                            // fills orderPrice/orderFilled
 
-            parseLore(st);                               // fills orderPrice/Vol
-
-            ItemData it = ItemData.findItem(
-                    null,
-                    orderPrice,
-                    orderVolFilled,
-                    ItemData.PriceType.INSTASELL);
-
-            if (it != null) return it;
+            /* naive match: same price ± rounding, same vol, same side         */
+            for (ItemData it : BUConfig.get().getWatchedItems()) {
+                if (it.isSimilarPrice(orderPrice) &&
+                    it.getVolume() == orderFilled &&
+                    it.getPriceType() == ItemData.PriceType.INSTASELL) return it;
+            }
         }
         return null;
     }
 
-    /** Extract order price & filled volume from tooltip lines. */
+    /** Extract price per unit + filled volume from the tooltip. */
     private void parseLore(ItemStack st) {
-        orderPrice      = -1;
-        orderVolFilled  = -1;
+        orderPrice   = -1;
+        orderFilled  = -1;
 
-        Minecraft mc = Minecraft.getMinecraft();
-        for (String s : st.getTooltip(mc.thePlayer, false)) {
-            String clean = Util.removeFormatting(s);
+        for (String raw : st.getTooltip(Minecraft.getMinecraft().thePlayer, false)) {
+            String s = Util.removeFormatting(raw);
 
-            if (clean.startsWith("Price per unit")) {
-                /* “Price per unit: 1 234.5 coins” */
-                String num = clean.replaceAll("[^0-9.]", "");
+            if (s.startsWith("Price per unit")) {               // “Price per unit: 123.4”
+                String num = s.replaceAll("[^0-9.]", "");
                 orderPrice = Double.parseDouble(num);
-            } else if (clean.startsWith("Filled")) {
-                /* “Filled: 128/128” */
-                int idx = clean.indexOf('/');
+            } else if (s.startsWith("Filled")) {                // “Filled: 128/128”
+                int idx = s.indexOf('/');
                 if (idx > 0) {
-                    String part = clean.substring(7, idx).replace(",", "");
-                    orderVolFilled = Integer.parseInt(part);
+                    orderFilled = Integer.parseInt(
+                            s.substring(7, idx).replace(",", ""));
                 }
             }
         }
     }
 
-    /** Detect the “Cancel order?” confirmation chest. */
+    /** Detect whether the current chest is the “Cancel order?” dialogue. */
     private boolean isCancelDialogue(ChestLoadedEvent ev) {
-        if (!BazaarUtils.GUI.getContainerName().contains("Order options"))
-            return false;
+        if (!GUIUtils.containerTitle().contains("Order options")) return false;
+        if (ev.getItemStacks().size() <= 11) return false;        // safety
 
-        /* slot 11 is the cancel-button – read first lore line */
-        if (ev.getItemStacks().size() <= 11) return false;
-
-        ItemStack s = ev.getItemStacks().get(11);
-        for (String t : s.getTooltip(Minecraft.getMinecraft().thePlayer, false))
+        ItemStack cancel = ev.getItemStacks().get(11);            // cancel button
+        for (String t : cancel.getTooltip(Minecraft.getMinecraft().thePlayer, false))
             if (t.contains("Cannot cancel")) return false;
-
         return true;
     }
 }
