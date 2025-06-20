@@ -14,96 +14,86 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Filters / shortens Hypixel “stash” reminder messages and
- * shows a one-time usage hint after the first manual stash claim.
- *
- * <p>No Fabric, Lombok or YACL – pure 1.8.9 Forge.</p>
+ * Filters / shortens Hypixel material-stash reminders and shows a one-time
+ * usage tip after the first manual stash claim.
+ * <p>Pure Forge 1.8.9 – no Fabric / Lombok / YACL dependencies.</p>
  */
 public final class StashMessages implements BUListener {
 
     /* ───────────────────────── config flags ───────────────────────── */
+    private boolean removeMessages;          // ON/OFF switch in GUI
+    private boolean stashPreviouslyClaimed;  // one-time hint already shown?
 
-    private boolean removeMessages;           // main ON/OFF switch
-    private boolean stashPreviouslyClaimed;   // one-time hint shown?
-
-    /* ───────────────────────── internal helpers ───────────────────── */
-
-    /** Rolling window of already-seen chat lines for pattern matching */
-    private final List<String> lastLines = new ArrayList<>(
-            Collections.singleton(""));      // dummy element
-
-    /** Static fragments that make up the multi-line reminder */
+    /* ───────────────────────── pattern helpers ────────────────────── */
+    private final List<String> recent = new ArrayList<>(Collections.singleton(""));
     private static final String[] PATTERN = {
-            " ",                                          // empty spacer
+            " ",                               // single space line
             "materials stashed away",
             "types of material stashed",
             "to pick them up",
-            "  "                                          // double-space line
+            "  "                               // double-space line
     };
 
     /* ───────────────────────── construction ───────────────────────── */
-
     public StashMessages(boolean remove) {
         this.removeMessages        = remove;
-        this.stashPreviouslyClaimed = BUConfig.get().stashMessages.stashPreviouslyClaimed;
+        this.stashPreviouslyClaimed = BUConfig.get().isStashTipShown();
     }
 
     /* ───────────────────────── BUListener ─────────────────────────── */
-
     @Override
     public void subscribe() {
         MinecraftForge.EVENT_BUS.register(this);
     }
 
-    /* ───────────────────────── public toggles ─────────────────────── */
-
-    public boolean isRemoveMessages()        { return removeMessages; }
-    public void    setRemoveMessages(boolean b) {
-        this.removeMessages = b;
-        BUConfig.HANDLER.save();
+    /* ───────────────────────── public toggle ──────────────────────── */
+    public boolean isRemoveMessages()          { return removeMessages; }
+    public void    setRemoveMessages(boolean b){
+        removeMessages = b;
+        BUConfig.get().setRemoveStashMessages(b);
+        BUConfig.save();                       // single static save helper
     }
 
     /* ───────────────────────── chat hook ──────────────────────────── */
-
     @SubscribeEvent
     public void onChat(ClientChatReceivedEvent ev) {
         String raw = ev.message.getUnformattedText();
 
-        /* 1) one-time tip after user claims stash manually */
+        /* 1) one-time hint after manual stash pickup */
         if (raw.contains("You picked up") && raw.contains("from your material stash")) {
             if (!stashPreviouslyClaimed) {
                 stashPreviouslyClaimed = true;
-                BUConfig.get().stashMessages.stashPreviouslyClaimed = true;
-                BUConfig.HANDLER.save();
+                BUConfig.get().setStashTipShown(true);
+                BUConfig.save();
 
                 Util.tickExecuteLater(2, () -> Util.notifyAll(
                         "TIP – Use " + BazaarUtils.STASH_HELPER.getUsage() +
-                        " to auto-claim stash!  Disable these messages in BU config."));
+                        " to auto-claim stash!  Disable these messages in the BU config."));
             }
-            return;                                     // never filtered
+            return;                        // never filtered
         }
 
-        /* 2) optional auto-removal of the 5-line reminder */
+        /* 2) optional five-line reminder suppression */
         if (!removeMessages) return;
 
         int role = classify(raw);
-        if (role == -1) { lastLines.clear(); return; }  // unrelated message
+        if (role == -1) {                  // unrelated chat line
+            recent.clear();
+            return;
+        }
 
-        /* build rolling window and decide whether to suppress */
-        if (role == lastLines.size()) {
-            lastLines.add(raw);                         // next expected line
-            if (lastLines.size() == PATTERN.length)     // reached the end
-                lastLines.clear();
-            ev.setCanceled(true);                       // hide this line
+        /* rolling-window comparison */
+        if (role == recent.size()) {
+            recent.add(raw);
+            ev.setCanceled(true);          // suppress this line
+            if (recent.size() == PATTERN.length) recent.clear();
         } else {
-            lastLines.clear();                          // pattern broken
-            if (role == 0) lastLines.add(raw);          // maybe new start
+            recent.clear();                // pattern broken – reset
+            if (role == 0) recent.add(raw);
         }
     }
 
-    /* ───────────────────────── helper methods ─────────────────────── */
-
-    /** Identify which PATTERN fragment the line belongs to (-1 = none). */
+    /* ───────────────────────── helpers ───────────────────────────── */
     private static int classify(String s) {
         for (int i = 0; i < PATTERN.length; i++) {
             if (PATTERN[i].trim().isEmpty()) {
