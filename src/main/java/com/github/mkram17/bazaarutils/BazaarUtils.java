@@ -18,6 +18,9 @@ import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import java.util.ArrayList;
 import java.util.List;
 
+public static final net.minecraftforge.common.MinecraftForge EVENT_BUS
+        = net.minecraftforge.common.MinecraftForge.EVENT_BUS;
+
 /**
  * Forge-1.8.9 entry-point for Bazaar-Utils.
  *
