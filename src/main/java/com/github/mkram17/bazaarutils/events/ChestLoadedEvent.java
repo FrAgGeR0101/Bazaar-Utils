@@ -1,134 +1,64 @@
 package com.github.mkram17.bazaarutils.events;
 
-import com.github.mkram17.bazaarutils.BazaarUtils;
-import com.github.mkram17.bazaarutils.utils.GUIUtils;
-import com.github.mkram17.bazaarutils.utils.Util;
 import lombok.Getter;
 import meteordevelopment.orbit.ICancellable;
-import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
-import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.inventory.Inventory;
 import net.minecraft.item.ItemStack;
-import net.minecraft.screen.GenericContainerScreenHandler;
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.text.Text;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
+/**
+ * Forge-1.8.9 version of ChestLoadedEvent.
+ *
+ * The original Fabric callback (ScreenEvents.AFTER_INIT, GenericContainerScreen, etc.)
+ * does not exist on 1.8.9, so this class is now a simple data-carrier that other
+ * parts of the mod can fill and post manually:
+ *
+ *     ChestLoadedEvent ev = new ChestLoadedEvent();
+ *     // ...populate fields…
+ *     BazaarUtils.eventBus.post(ev);
+ */
 public class ChestLoadedEvent implements ICancellable, BUListener {
+
+    /* ------------------------------------------------------------------
+       Event data
+       ------------------------------------------------------------------ */
     @Getter
-    private Inventory lowerChestInventory;
+    private Object lowerChestInventory;          // kept for API parity
+
     @Getter
     private List<ItemStack> itemStacks = new ArrayList<>();
+
     @Getter
-    private String containerName;
+    private String containerName = "";
 
+    /* ------------------------------------------------------------------
+       BUListener
+       ------------------------------------------------------------------ */
     @Override
-    public void subscribe(){
-        registerScreenEvent();
+    public void subscribe() {
+        // No automatic GUI hook on 1.8.9 – post this event manually
     }
 
-    public static void registerScreenEvent() {
-       public static void registerScreenEvent() {
-    ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
-        /* ── Check that the current screen is a GenericContainerScreen ── */
-        if (screen instanceof GenericContainerScreen) {
-            GenericContainerScreen genericContainerScreen =
-                (GenericContainerScreen) screen;
-
-            // Optional async check preserved from upstream code
-            CompletableFuture.runAsync(() ->
-                    checkIfGuiLoaded(genericContainerScreen))
-                .thenRun(() -> {
-                    // Util.notifyAll("Chest loaded event went off!", Util.notificationTypes.GUI);
-                });
-
-            /* ── Build and post ChestLoadedEvent ── */
-            ChestLoadedEvent event = new ChestLoadedEvent();
-            ScreenHandler handler = genericContainerScreen.getScreenHandler();
-
-            if (handler instanceof GenericContainerScreenHandler) {
-                GenericContainerScreenHandler containerHandler =
-                    (GenericContainerScreenHandler) handler;
-
-                event.lowerChestInventory = containerHandler.getInventory();
-                event.containerName       = GUIUtils.getContainerName();
-                event.itemStacks          = returnItemStacks(event.lowerChestInventory);
-
-                BazaarUtils.eventBus.post(event);
-                // Util.notifyAll("Chest Loaded Event posted!");
-            }
-        }
-    });
-}
-
-    private static List<ItemStack> returnItemStacks(Inventory inventory) {
-        List<ItemStack> stacks = new ArrayList<>();
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (!stack.isEmpty()) {
-                stacks.add(stack);
-            }
-        }
-        return stacks;
-    }
-
-    static void checkIfGuiLoaded(GenericContainerScreen screen) {
-        while (true) {
-            try {
-                Thread.sleep(20);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-
-            ScreenHandler handler = screen.getScreenHandler();
-            if (handler instanceof GenericContainerScreenHandler) {
-    GenericContainerScreenHandler containerHandler =
-        (GenericContainerScreenHandler) handler;
-                Inventory inv = containerHandler.getInventory();
-                int size = inv.size();
-                if (size == 0) continue;
-
-                ItemStack bottomRightItem = inv.getStack(size - 1);
-                if (!bottomRightItem.isEmpty() && !isItemLoading(inv)) {
-                    break;
-                }
-            }
-        }
-    }
-
-    private static boolean isItemLoading(Inventory inventory) {
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack item = inventory.getStack(i);
-            if (item.isEmpty()) continue;
-
-            Text customName = item.get(DataComponentTypes.CUSTOM_NAME);
-            if (customName != null) {
-                String displayName = Util.removeFormatting(customName.getString());
-                if (displayName.contains("Loading")) {
-                    Util.notifyAll("Loading item...", Util.notificationTypes.GUI);
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
+    /* ------------------------------------------------------------------
+       Helpers
+       ------------------------------------------------------------------ */
     public boolean inFlipMenu() {
-        return containerName.contains("Order options");
+        return containerName != null && containerName.contains("Order options");
     }
+
+    /* ------------------------------------------------------------------
+       ICancellable implementation
+       ------------------------------------------------------------------ */
+    private boolean cancelled = false;
 
     @Override
     public void setCancelled(boolean b) {
-
+        this.cancelled = b;
     }
 
     @Override
     public boolean isCancelled() {
-        return false;
+        return cancelled;
     }
 }
