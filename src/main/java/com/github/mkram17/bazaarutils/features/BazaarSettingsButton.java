@@ -4,8 +4,8 @@ import com.github.mkram17.bazaarutils.BazaarUtils;
 import com.github.mkram17.bazaarutils.config.BUConfig;
 import com.github.mkram17.bazaarutils.misc.ItemSlotButtonWidget;
 import com.github.mkram17.bazaarutils.mixin.AccessorHandledScreen;
-import com.github.mkram17.bazaarutils.utils.GUIUtils;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.util.ResourceLocation;
 
 import java.util.ArrayList;
@@ -13,52 +13,50 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Small cog-shaped button shown on every Bazaar GUI.
- * Pure Forge-1.8.9 implementation (no Fabric classes).
+ * A tiny 18 × 18 cog button that opens the Bazaar-Utils settings GUI.
+ * <p>Forge 1.8.9-only – no Fabric/YACL classes.</p>
  */
 public final class BazaarSettingsButton {
 
-    /* ------------------------------------------------------------------ */
-    /*  Widget textures (assets/<modid>/textures/widget/ … )              */
-    /* ------------------------------------------------------------------ */
-    private static final ResourceLocation BASE  =
+    /* ───────────────────────── textures ───────────────────────── */
+    private static final ResourceLocation TEX_BASE =
             new ResourceLocation(BazaarUtils.MODID,
-                                 "textures/widget/widget_settings_base.png");
-    private static final ResourceLocation HOVER =
+                    "textures/widget/widget_settings_base.png");
+    private static final ResourceLocation TEX_HOVER =
             new ResourceLocation(BazaarUtils.MODID,
-                                 "textures/widget/widget_settings_hover.png");
+                    "textures/widget/widget_settings_hover.png");
 
-    /* ------------------------------------------------------------------ */
-    /*  Build button(s) for the *current* GUI                             */
-    /* ------------------------------------------------------------------ */
+    /* ───────────────────────── public builder ──────────────────── */
     public static List<ItemSlotButtonWidget> getWidget() {
 
         Minecraft mc = Minecraft.getMinecraft();
 
-        /* Only draw while inside *any* Bazaar screen */
-        if (!BazaarUtils.GUI.inBazaar())   return Collections.emptyList();
-        if (mc.currentScreen == null)      return Collections.emptyList();
+        // 1) only while *any* Bazaar screen is open
+        if (!BazaarUtils.GUI.inBazaar())        return Collections.emptyList();
+        if (mc.currentScreen == null)           return Collections.emptyList();
 
-        /* Need access to HandledScreen internals */
+        // 2) we need a handled-screen (for safe co-ordinates)
         if (!(mc.currentScreen instanceof AccessorHandledScreen))
             return Collections.emptyList();
-        AccessorHandledScreen screen = (AccessorHandledScreen) mc.currentScreen;
 
-        /* Safe drawing-area co-ordinates inside the vanilla container */
+        /* ----------------------------------------------------------
+           Safe drawing area inside the vanilla container
+           ---------------------------------------------------------- */
+        GuiContainer container = (GuiContainer) mc.currentScreen;
         ItemSlotButtonWidget.ScreenWidgetDimensions dims =
-                ItemSlotButtonWidget.getSafeScreenDimensions(
-                        screen,
-                        GUIUtils.containerTitle());
+                ItemSlotButtonWidget.getSafeScreenDimensions(container);
 
-        final int SIZE    = 18;        // 18×18 pixel button
-        final int PADDING = 4;
-        final int x       = dims.x - SIZE - PADDING;   // left of container
-        final int y       = dims.y + PADDING;          // top-aligned
+        final int SIZE    = 18;      // square 18-pixel button
+        final int PAD     = 4;
+        final int x       = dims.x - SIZE - PAD;   // to the *left* of BG
+        final int y       = dims.y + PAD;          // align to top
 
-        /* Build the textured cog button */
-        ItemSlotButtonWidget cog = new ItemSlotButtonWidget(
-                x, y, SIZE, SIZE,
-                BASE, HOVER,
+        /* ----------------------------------------------------------
+           Build the cog-button with two textures
+           ---------------------------------------------------------- */
+        ItemSlotButtonWidget cog = ItemSlotButtonWidget.textured(
+                x, y, SIZE,
+                TEX_BASE, TEX_HOVER,
                 () -> mc.displayGuiScreen(
                         BUConfig.get().createGUI(mc.currentScreen)),
                 "Bazaar-Utils Settings");
@@ -68,6 +66,6 @@ public final class BazaarSettingsButton {
         return out;
     }
 
-    /* Prevent instantiation */
+    /* prevent instantiation */
     private BazaarSettingsButton() {}
 }
