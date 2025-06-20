@@ -18,35 +18,33 @@ import java.nio.file.Path;
 import java.util.*;
 
 /**
- * Generic helpers (chat notifications, clipboard, file-IO, tick scheduling …).
+ * Generic helpers: chat notifications, clipboard, file-I/O, tick scheduling …
  */
 public final class Util implements BUListener {
 
-    /* ------------------------------------------------------------------ */
-    /*  developer-notification helpers                                   */
-    /* ------------------------------------------------------------------ */
-
+    /* ────────────────────────────────────────────────────────────────
+       Developer-notification helper
+       ──────────────────────────────────────────────────────────────── */
     public enum NotificationType {
         GUI, FEATURE, BAZAARDATA, COMMAND, ITEMDATA;
 
-        /** Whether this notification category is enabled in the config. */
+        /** Is this notification category enabled in the config? */
         public boolean isEnabled() {
             return BUConfig.get().developer.isDevMessageEnabled(this);
         }
     }
 
-    /* The global task-queue executed from END_CLIENT_TICK -------------- */
-    private static final LinkedList<ScheduledTask> TASKS = new LinkedList<>();
+    /* ───────────────────────────────
+       Small static info / help texts
+       ─────────────────────────────── */
+    public static final String HELPMESSAGE =
+            "§eCommands: §7/bu or /bazaarutils opens the settings GUI\n" +
+            "§6----------------------------------------\n" +
+            "§7/bu tax <amount> – set Bazaar tax\n" +
+            "§7/bu customorder … – manage custom orders\n" +
+            "§6----------------------------------------";
 
-    /* Simple help / info strings -------------------------------------- */
-    public static final String HELPMESSAGE = """
-            §eCommands: §7/bu or /bazaarutils opens the settings GUI
-            §6----------------------------------------
-            §7/bu tax <amount> – set Bazaar tax
-            §7/bu customorder … – manage custom orders
-            §6----------------------------------------""";
-
-    public static final Text DISCORD_LINK  = Text.literal("Discord server")
+    public static final Text DISCORD_LINK = Text.literal("Discord server")
             .styled(style -> style
                     .withBold(true)
                     .withClickEvent(ClickEvent.openUrl(URI.create("https://discord.gg/xDKjvm5hQd")))
@@ -59,117 +57,96 @@ public final class Util implements BUListener {
                     .withClickEvent(ClickEvent.openUrl(URI.create("https://modrinth.com/mod/bazaar-utils/changelog")))
                     .withHoverEvent(HoverEvent.showText(Text.literal("Latest update notes"))));
 
-    /* ------------------------------------------------------------------ */
-    /*  BUListener implementation                                        */
-    /* ------------------------------------------------------------------ */
+    /* ───────────────────────────────
+       Simple in-game scheduler
+       ─────────────────────────────── */
+    private static final LinkedList<ScheduledTask> TASKS = new LinkedList<>();
 
-    @Override
-    public void subscribe() {
-        subscribeTicks();
-    }
+    private static final class ScheduledTask {
+        int     ticksLeft;
+        Runnable action;
 
-    /* ------------------------------------------------------------------ */
-    /*  Chat + log helpers                                                */
-    /* ------------------------------------------------------------------ */
-
-    public static void notifyAll(String message) {
-        notifyAll(message, NotificationType.GUI);
-    }
-
-    public static void notifyAll(String message, NotificationType type) {
-
-        if (!type.isEnabled() && !BUConfig.get().developer.allMessages) return;
-
-        MutableText txt = Text.literal("[Bazaar Utils] ")
-                               .formatted(Formatting.GOLD)
-                               .append(Text.literal(message).formatted(Formatting.WHITE));
-
-        if (MinecraftClient.getInstance().player != null)
-            MinecraftClient.getInstance().player.sendMessage(txt, false);
-
-        LogManager.getLogger(getCallingClassName())
-                  .info("[Bazaar-Utils] " + message);
-    }
-
-    public static void notifyError(String message, Throwable t) {
-        Text txt = Text.literal("[Bazaar-Utils Error] " + message)
-                .formatted(Formatting.RED)
-                .styled(s -> s.withClickEvent(ClickEvent.openUrl(
-                                URI.create("https://discord.gg/xDKjvm5hQd")))
-                              .withHoverEvent(HoverEvent.showText(Text.literal("Click for Discord support"))));
-
-        if (MinecraftClient.getInstance().player != null)
-            MinecraftClient.getInstance().player.sendMessage(txt, false);
-
-        if (t != null) {
-            LogManager.getLogger(getCallingClassName()).error(message, t);
-        } else {
-            LogManager.getLogger(getCallingClassName()).error(message);
+        ScheduledTask(int ticksLeft, Runnable action) {
+            this.ticksLeft = ticksLeft;
+            this.action    = action;
         }
     }
 
-    /** Send a green clickable chat-message that runs the given command. */
-    public static void notifyChatCommand(Text text, String command) {
-        if (MinecraftClient.getInstance().player == null) return;
-
-        Text styled = text.copy().styled(s -> s
-                .withClickEvent(ClickEvent.runCommand("/" + command))
-                .withHoverEvent(HoverEvent.showText(Text.literal("Run /" + command)))
-                .withColor(Formatting.GREEN));
-
-        MinecraftClient.getInstance().player.sendMessage(styled, false);
-    }
-
-    /* ------------------------------------------------------------------ */
-    /*  Config / data helpers                                             */
-    /* ------------------------------------------------------------------ */
-
-    public static void addWatchedItem(ItemData item) {
-        if (item == null) return;
-
-        BUConfig.get().watchedItems.add(item);
-        notifyAll("Added item: " + item.getGeneralInfo(), NotificationType.ITEMDATA);
-        BUConfig.HANDLER.save();
-        ItemData.update();
-    }
-
-    /* ------------------------------------------------------------------ */
-    /*  Tick-scheduler                                                    */
-    /* ------------------------------------------------------------------ */
-
-    private record ScheduledTask(int ticksLeft, Runnable action) {}
-
-    private static void subscribeTicks() {
+    /* ------------------------------------------------------------------
+       BUListener
+       ------------------------------------------------------------------ */
+    @Override
+    public void subscribe() {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             synchronized (TASKS) {
                 Iterator<ScheduledTask> it = TASKS.iterator();
-                List<ScheduledTask> updated = new ArrayList<>();
                 while (it.hasNext()) {
                     ScheduledTask t = it.next();
-                    if (t.ticksLeft() <= 1) {
-                        t.action().run();
-                        it.remove();
-                    } else {
-                        updated.add(new ScheduledTask(t.ticksLeft() - 1, t.action()));
+                    if (--t.ticksLeft <= 0) {
+                        t.action.run();
                         it.remove();
                     }
                 }
-                TASKS.addAll(updated);
             }
         });
     }
 
-    /** Schedule a task for N client ticks in the future. */
+    /** Schedule a task for execution n client-ticks later. */
     public static void tickExecuteLater(int ticks, Runnable action) {
-        synchronized (TASKS) {
-            TASKS.add(new ScheduledTask(ticks, action));
-        }
+        synchronized (TASKS) { TASKS.add(new ScheduledTask(ticks, action)); }
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Misc helpers                                                      */
-    /* ------------------------------------------------------------------ */
+    /* ───────────────────────────────
+       Chat + log helpers
+       ─────────────────────────────── */
+    public static void notifyAll(String msg) {
+        notifyAll(msg, NotificationType.GUI);
+    }
 
+    public static void notifyAll(String msg, NotificationType type) {
+        if (!type.isEnabled() && !BUConfig.get().developer.allMessages) return;
+
+        MutableText txt = Text.literal("[Bazaar Utils] ").formatted(Formatting.GOLD)
+                              .append(Text.literal(msg).formatted(Formatting.WHITE));
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player != null) mc.player.sendMessage(txt, false);
+
+        LogManager.getLogger(getCallingClassName()).info(msg);
+    }
+
+    public static void notifyError(String message, Throwable t) {
+        Text txt = Text.literal("[Bazaar-Utils Error] " + message)
+                       .formatted(Formatting.RED)
+                       .styled(s -> s
+                               .withClickEvent(ClickEvent.openUrl(URI.create("https://discord.gg/xDKjvm5hQd")))
+                               .withHoverEvent(HoverEvent.showText(Text.literal("Click for Discord support"))));
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player != null) mc.player.sendMessage(txt, false);
+
+        if (t != null)
+            LogManager.getLogger(getCallingClassName()).error(message, t);
+        else
+            LogManager.getLogger(getCallingClassName()).error(message);
+    }
+
+    /** Green clickable chat message that runs a command. */
+    public static void notifyChatCommand(Text txt, String command) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return;
+
+        Text styled = txt.copy().styled(s -> s
+                .withClickEvent(ClickEvent.runCommand("/" + command))
+                .withHoverEvent(HoverEvent.showText(Text.literal("Run /" + command)))
+                .withColor(Formatting.GREEN));
+
+        mc.player.sendMessage(styled, false);
+    }
+
+    /* ───────────────────────────────
+       Generic helpers
+       ─────────────────────────────── */
     public static void sendCommand(String cmd) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player != null) mc.player.networkHandler.sendChatCommand(cmd);
@@ -184,14 +161,23 @@ public final class Util implements BUListener {
         return s.replaceAll("§.", "").replace(",", "").trim();
     }
 
-    public static double truncate(double v) {
-        return Math.round(v * 100) / 100.0;
+    public static int parseNumber(String input) {
+        String up = input.toUpperCase(Locale.ROOT);
+        double v = Double.parseDouble(up.replaceAll("[^0-9.]", ""));
+        if (up.endsWith("K")) return (int)(v * 1_000);
+        if (up.endsWith("M")) return (int)(v * 1_000_000);
+        if (up.endsWith("B")) return (int)(v * 1_000_000_000);
+        return (int)v;
     }
 
-    public static double pretty(double v) {
-        return truncate(Double.parseDouble(String.valueOf(v)
-                                           .replaceAll("\\.0$", "")
-                                           .replaceAll("(\\.\\d*?)0+$", "$1")));
+    public static double truncate(double d) {
+        return Math.round(d * 100) / 100.0;
+    }
+
+    public static double pretty(double d) {
+        String s = String.valueOf(d).replaceAll("\\.0$", "")
+                                    .replaceAll("(\\.\\d*?)0+$", "$1");
+        return Double.parseDouble(s);
     }
 
     public static void writeFile(Object content) {
@@ -199,25 +185,42 @@ public final class Util implements BUListener {
             Files.writeString(Path.of("bazaar_data.json"), content.toString());
             notifyAll("Data written to bazaar_data.json");
         } catch (Exception e) {
-            notifyError("Failed to write file", e);
+            notifyError("Failed writing file", e);
         }
     }
 
-    /* -------------------------------------------------------- */
+    /* Small chat component helpers ----------------------------------- */
+    public static int findComponentIndex(List<Text> components, String needle) {
+        for (int i = 0; i < components.size(); i++)
+            if (components.get(i).getString().contains(needle)) return i;
+        return -1;
+    }
 
+    public static String findComponentWith(List<Text> components, String needle) {
+        for (Text c : components)
+            if (c.getString().contains(needle)) return c.getString();
+        return null;
+    }
+
+    /* ───────────────────────────────
+       Simple item-watch helpers
+       ─────────────────────────────── */
+    public static void addWatchedItem(ItemData item) {
+        if (item == null) return;
+
+        BUConfig.get().watchedItems.add(item);
+        notifyAll("Added item: " + item.getGeneralInfo(), NotificationType.ITEMDATA);
+        BUConfig.HANDLER.save();
+        ItemData.update();
+    }
+
+    /* ---------------------------------------------------------------- */
     private static String getCallingClassName() {
-        StackTraceElement[] stack = Thread.currentThread().getStackTrace();
-        return stack.length > 3
-                ? stack[3].getClassName()
-                : "UnknownClass";
+        StackTraceElement[] st = Thread.currentThread().getStackTrace();
+        return st.length > 3 ? st[3].getClassName() : "UnknownClass";
     }
 
-    /* -------------------------------------------------------- */
-    /*  Functional interface                                    */
-    /* -------------------------------------------------------- */
-
+    /* ---------------------------------------------------------------- */
     @FunctionalInterface
-    public interface LengthJudger {
-        int judgeLength(char c);
-    }
+    public interface LengthJudger { int judgeLength(char c); }
 }
