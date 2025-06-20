@@ -1,4 +1,3 @@
-// MixinHandledScreen.java
 package com.github.mkram17.bazaarutils.mixin;
 
 import com.github.mkram17.bazaarutils.BazaarUtils;
@@ -7,92 +6,118 @@ import com.github.mkram17.bazaarutils.events.SlotClickEvent;
 import com.github.mkram17.bazaarutils.features.StashHelper;
 import com.github.mkram17.bazaarutils.features.restrictsell.RestrictSell;
 import com.github.mkram17.bazaarutils.misc.ItemSlotButtonWidget;
-import com.github.mkram17.bazaarutils.misc.ModCompatibilityHelper;
 import com.github.mkram17.bazaarutils.utils.Util;
-import com.moulberry.mixinconstraints.annotations.IfModLoaded;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.screen.slot.Slot;
-import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.inventory.GuiContainer;
+import net.minecraft.inventory.Container;
+import net.minecraft.inventory.Slot;
+import net.minecraft.item.ItemStack;
+import net.minecraft.util.ChatComponentText;
+import net.minecraft.util.EnumChatFormatting;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-//used for SlotClickEvent, register keybinds in chests, block slot clicks
-@Mixin(value = HandledScreen.class, priority = 999)
-public abstract class MixinHandledScreen<T extends ScreenHandler> extends Screen {
+/**
+ * Forge 1.8.9 mixin that:
+ * <ul>
+ *   <li>publishes a {@link SlotClickEvent} for every slot interaction,</li>
+ *   <li>enforces {@link RestrictSell} “insta-sell” rules,</li>
+ *   <li>passes clicks to {@link StashHelper} when its key-bind is active,</li>
+ *   <li>adds Bazaar-Utils overlay buttons once the GUI is initialised.</li>
+ * </ul>
+ * <p>All references are strictly 1.8.9 classes—no modern Text API,
+ * ScreenHandler, SlotActionType, etc.</p>
+ */
+@Mixin(GuiContainer.class)
+public abstract class MixinHandledScreen {
 
+    /* ────────────────────────────────────────────────────────────────
+       1)  Emit SlotClickEvent + Restrict-Sell guard
+       ─────────────────────────────────────────────────────────────── */
+    @Inject(
+        method = "handleMouseClick(Lnet/minecraft/inventory/Slot;IILjava/lang/String;)V",
+        at     = @At("HEAD"),
+        cancellable = true)
+    private void bazaarutils$onHandleMouseClick(
+            Slot slot, int slotId, int clickedButton, String clickType,
+            CallbackInfo ci) {
 
-	protected MixinHandledScreen(Text title) {
-		super(title);
-	}
+        if (slot == null) return;
 
-	@Inject(method = "onMouseClick(Lnet/minecraft/screen/slot/Slot;IILnet/minecraft/screen/slot/SlotActionType;)V",at = @At("HEAD"),cancellable = true)
-	private void onHandleMouseClick(Slot slot, int slotId, int button, SlotActionType actionType, CallbackInfo ci) {
-		if (slot == null) return;
+        /* Restrict-Sell ------------------------------------------------ */
+        RestrictSell rs = BUConfig.get().restrictSell;
+        if (rs != null && rs.isSlotLocked(slotId)) {
+            if (rs.getSafetyClicks() < 3) {
+                rs.addSafetyClick();
+                Util.notifyAll(rs.getMessage());
+                ci.cancel();
+                return;
+            } else {
+                rs.resetSafetyClicks();
+            }
+        }
 
-		//for insta sell rules
-		RestrictSell sell = BUConfig.get().restrictSell;
-		if (sell.isSlotLocked(slotId)) {
-			if (sell.getSafetyClicks() < 3) {
-				sell.addSafetyClick();
-				Util.notifyAll(sell.getMessage());
-				ci.cancel();
-			} else {
-				sell.resetSafetyClicks();
-			}
-		}
+        /* SlotClickEvent ---------------------------------------------- */
+        GuiContainer self = (GuiContainer) (Object) this;
+        SlotClickEvent ev = new SlotClickEvent(
+                self, slot, slotId, clickedButton, clickType);
+        BazaarUtils.EVENT_BUS.post(ev);
 
-		HandledScreen<?> screen = (HandledScreen<?>) (Object) this;
-		SlotClickEvent event = new SlotClickEvent(screen, slot, slotId, button, actionType);
-		BazaarUtils.eventBus.post(event);
-//		Util.notifyAll("Mouse Click Posted");
-// Use the accessor to safely get the client instance
-		MinecraftClient client = ((AccessorScreen) screen).getClient();
-		if (event.isCancelled()) {
-			ci.cancel();
-			return;
-		}
+        if (ev.isCancelled()) {
+            ci.cancel();
+            return;
+        }
 
-		if (event.usePickblockInstead) {
-			assert client != null && client.player != null;
-			client.interactionManager.clickSlot(
-					screen.getScreenHandler().syncId,
-					slotId,
-					2,
-					SlotActionType.PICKUP,
-					client.player
-			);
-			ci.cancel();
-		}
-	}
+        /* “Pick-block instead” fallback (used by Flip-Helper) */
+        if (ev.usePickblockInstead()) {
+            Minecraft mc = Minecraft.getMinecraft();
+            if (mc.playerController != null && mc.thePlayer != null) {
+                Container c = mc.thePlayer.openContainer;
+                mc.playerController.windowClick(
+                        c.windowId, slotId, 2, 0, mc.thePlayer); // button=2 → pick-block
+            }
+            ci.cancel();
+        }
+    }
 
-	@IfModLoaded(ModCompatibilityHelper.AMECS_MODID)
-	@Inject(method = "keyPressed", at = @At("HEAD"), cancellable = true)
-	public void onkeyPressed(int keyCode, int scanCode, int modifiers, CallbackInfoReturnable<Boolean> cir) {
-		StashHelper keyBinding = (StashHelper) BazaarUtils.keybinds.getFirst();
-		if (!keyBinding.isPressed() && keyBinding.getDefaultKey().getCode() == keyCode && keyBinding.getDefaultModifiers().getAlt()) {
-			Util.notifyAll("Stash helper pressed", Util.notificationTypes.FEATURE);
-			if(keyBinding.getTicksBetweenPresses() > 10)
-				keyBinding.setPressed(true);
-			cir.setReturnValue(true);
-		}
-	}
+    /* ────────────────────────────────────────────────────────────────
+       2)  Key-press hook for StashHelper (only if Amecs is present)
+       ─────────────────────────────────────────────────────────────── */
+    @Inject(method = "keyTyped", at = @At("HEAD"), cancellable = true)
+    private void bazaarutils$onKeyTyped(char chr, int code, CallbackInfoReturnable<Boolean> cir) {
+        if (BazaarUtils.STASH_HELPER == null) return;
 
-	@Inject(method = "init", at = @At("TAIL"))
-	private void bazaarutils$addConfiguredButtons(CallbackInfo ci) {
+        StashHelper kb = BazaarUtils.STASH_HELPER;
+        /* default Amecs binding: ALT+V (code stored in StashHelper) */
+        if (!kb.isPressed() && kb.matchesKey(code)) {
+            if (kb.getTicksBetweenPresses() > 10) {
+                kb.setPressed(true);
+                Util.notifyAll("§e[Stash-Helper] closing GUI + /pickupstash",
+                        Util.NotificationType.FEATURE);
+            }
+            cir.setReturnValue(Boolean.TRUE);   // consume key
+        }
+    }
 
-
-		int buttonsAdded = 0;
-		for (ItemSlotButtonWidget button : BUConfig.getWidgets()) {
-			this.addDrawableChild(button);
-			buttonsAdded++;
-		}
-	}
-
+    /* ────────────────────────────────────────────────────────────────
+       3)  After the container is set up, add BU overlay buttons
+       ─────────────────────────────────────────────────────────────── */
+    @Inject(method = "initGui", at = @At("TAIL"))
+    private void bazaarutils$addButtons(CallbackInfo ci) {
+        int added = 0;
+        for (ItemSlotButtonWidget w : BUConfig.getWidgets()) {
+            // GuiContainer#buttonList is public in 1.8.9
+            ((GuiContainer)(Object)this).buttonList.add(w);
+            added++;
+        }
+        if (added > 0 && Minecraft.getMinecraft().thePlayer != null) {
+            Minecraft.getMinecraft().thePlayer.addChatMessage(
+                    new ChatComponentText(EnumChatFormatting.DARK_GRAY +
+                            "[Bazaar-Utils] added " + added + " overlay button" +
+                            (added == 1 ? "" : "s")));
+        }
+    }
 }
