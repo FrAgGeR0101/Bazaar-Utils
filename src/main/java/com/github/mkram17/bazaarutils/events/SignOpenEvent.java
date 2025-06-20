@@ -1,19 +1,21 @@
 package com.github.mkram17.bazaarutils.events;
 
-import net.minecraft.client.gui.GuiEditSign;
-
 /**
- * Fired whenever the vanilla sign–editing GUI is opened.
+ * Event object posted (manually) when the vanilla sign-editing screen opens.
  *
- * <p>No Lombok, no Orbit, no Fabric – just a tiny, self-contained POJO
- * that other parts of the mod can populate / query.</p>
+ * <p>The concrete screen class differs between mappings / versions
+ * ( Fabric · Forge · MCP, 1.8.9 ↔ 1.20.x, etc.).  
+ * To avoid compile-time breakage we store it as a plain {@code Object}.</p>
+ *
+ * <p>Other code that actually needs to interact with the screen should
+ * <code>instanceof</code>–check and cast accordingly.</p>
  */
 public final class SignOpenEvent {
 
     /* ------------------------------------------------------------------
        Immutable context
        ------------------------------------------------------------------ */
-    private final GuiEditSign signGui;
+    private final Object signScreen;   // vanilla sign GUI – kept generic
 
     /* ------------------------------------------------------------------
        Mutable “cancelled” flag
@@ -23,22 +25,25 @@ public final class SignOpenEvent {
     /* ------------------------------------------------------------------
        Ctor
        ------------------------------------------------------------------ */
-    public SignOpenEvent(GuiEditSign signGui) {
-        this.signGui = signGui;
+    public SignOpenEvent(Object screen) {
+        this.signScreen = screen;
     }
 
     /* ------------------------------------------------------------------
        Accessors
        ------------------------------------------------------------------ */
-    public GuiEditSign getSignGui() {
-        return signGui;
+    /** Return the raw sign-editing screen instance (cast as needed). */
+    public Object getSignScreen() {
+        return signScreen;
     }
 
+    /** Mark the event as cancelled so listeners can suppress default behaviour. */
+    public void setCancelled(boolean flag) {
+        this.cancelled = flag;
+    }
+
+    /** @return {@code true} if some listener cancelled the event */
     public boolean isCancelled() {
         return cancelled;
-    }
-
-    public void setCancelled(boolean cancelled) {
-        this.cancelled = cancelled;
     }
 }
