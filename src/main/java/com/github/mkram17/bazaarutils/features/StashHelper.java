@@ -2,52 +2,84 @@ package com.github.mkram17.bazaarutils.features;
 
 import com.github.mkram17.bazaarutils.utils.GUIUtils;
 import com.github.mkram17.bazaarutils.utils.Util;
-import de.siphalor.amecs.api.AmecsKeyBinding;
-import de.siphalor.amecs.api.KeyModifiers;
-import lombok.Getter;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.util.InputUtil;
-import org.lwjgl.glfw.GLFW;
+import com.github.mkram17.bazaarutils.events.BUListener;
+import net.minecraftforge.fml.common.gameevent.TickEvent;
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.fml.client.registry.ClientRegistry;
+import net.minecraft.client.settings.KeyBinding;
+import net.minecraft.client.Minecraft;
+import org.lwjgl.input.Keyboard;
 
-//TODO make using amecs optional
-public class StashHelper extends AmecsKeyBinding {
-    @Getter
-    private transient int ticksBetweenPresses;
+/**
+ * Simple “/pickupstash” helper:
+ * <ul>
+ *   <li>ALT&nbsp;+&nbsp;V by default</li>
+ *   <li>Debounced – needs at least 10 client-ticks between key-presses</li>
+ *   <li>Closes the current GUI, then runs the command</li>
+ * </ul>
+ *
+ * <p>No Fabric, no Amecs – plain Forge 1.8.9 key-binding and tick-event.</p>
+ */
+public final class StashHelper implements BUListener {
+
+    /* ------------------------------------------------------------ */
+    /*  key binding                                                 */
+    /* ------------------------------------------------------------ */
+
+    private static final KeyBinding KEY =
+            new KeyBinding("key.bu.pickupstash",
+                           Keyboard.KEY_V,
+                           "Bazaar-Utils");
+
+    /* modifier: hold either left- or right-ALT together with V      */
+    private static boolean altHeld() {
+        return Keyboard.isKeyDown(Keyboard.KEY_LMENU) ||
+               Keyboard.isKeyDown(Keyboard.KEY_RMENU);
+    }
+
+    /* ------------------------------------------------------------ */
+    /*  debounce state                                              */
+    /* ------------------------------------------------------------ */
+
+    private int ticksSinceLastPress = 20;   // start “ready”
+
+    /* ------------------------------------------------------------ */
+    /*  lifecycle                                                   */
+    /* ------------------------------------------------------------ */
 
     public StashHelper() {
-        super("Pick Up Stash", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_V, "Bazaar utils", new KeyModifiers(true, false, false, false));
-        ticksBetweenPresses = 0;
+        ClientRegistry.registerKeyBinding(KEY);
     }
 
     @Override
-    public void onPressed(){
-        if(ticksBetweenPresses>10) {
-            ticksBetweenPresses = 0;
+    public void subscribe() {
+        /* Orbit already registered in BazaarUtils */
+        com.github.mkram17.bazaarutils.BazaarUtils.EVENT_BUS.subscribe(this);
+    }
+
+    /* ------------------------------------------------------------ */
+    /*  tick handler                                                */
+    /* ------------------------------------------------------------ */
+
+    @SubscribeEvent
+    @SuppressWarnings("unused")
+    public void onClientTick(TickEvent.ClientTickEvent ev) {
+        if (ev.phase != TickEvent.Phase.END) return;
+
+        ++ticksSinceLastPress;
+
+        if (KEY.isKeyDown() && altHeld() && ticksSinceLastPress > 10) {
+            ticksSinceLastPress = 0;
             GUIUtils.closeHandledScreen();
             Util.sendCommand("pickupstash");
         }
     }
 
-    public void registerTickCounter() {
-        ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            ticksBetweenPresses++;
-        });
+    /* ------------------------------------------------------------ */
+    /*  small helper shown in settings-GUI (optional)               */
+    /* ------------------------------------------------------------ */
+
+    public String getUsage() {
+        return "ALT + " + Keyboard.getKeyName(KEY.getKeyCode());
     }
-
-    public String getUsage(){
-        return getModifierString(getDefaultModifiers().getValue()) +"+" + getDefaultKey().getLocalizedText().getString();
-    }
-
-    private static String getModifierString(boolean[] modifiers) {
-        String modifierString = "";
-        if(modifiers[0])
-            modifierString += "ALT";
-        if(modifiers[1])
-            modifierString += "CTRL";
-        if(modifiers[2])
-            modifierString += "SHIFT";
-        return modifierString;
-    }
-
-
 }
