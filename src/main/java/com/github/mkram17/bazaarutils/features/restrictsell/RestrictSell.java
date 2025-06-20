@@ -13,7 +13,6 @@ import net.minecraft.util.ChatComponentText;
 import java.util.ArrayList;
 import java.util.List;
 
-import static com.github.mkram17.bazaarutils.BazaarUtils.EVENT_BUS;
 
 /**
  * Forge-1.8.9 implementation of the “Restrict Sell” helper.
@@ -41,8 +40,8 @@ public final class RestrictSell implements BUListener {
 
     /* ───────── BUListener ───────── */
     @Override public void subscribe() {
-        EVENT_BUS.subscribe(this);
-        EVENT_BUS.subscribe((ChestLoadedEvent ev) -> safetyClicks = 0);   // reset each GUI
+        BazaarUtils.eventBus.subscribe(this);
+        BazaarUtils.eventBus.subscribe((ChestLoadedEvent ev) -> safetyClicks = 0);   // reset each GUI
     }
 
     /* ───────── ReplaceItemEvent hook ───────── */
