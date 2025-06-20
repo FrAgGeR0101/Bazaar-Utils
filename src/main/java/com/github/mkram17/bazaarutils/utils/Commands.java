@@ -10,25 +10,22 @@ import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.BlockPos;
 import net.minecraftforge.client.ClientCommandHandler;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 /**
- * Simplified Forge-1.8.9 client command:
+ * Forge-1.8.9 client command:
  *
- * <pre>
- * /bazaarutils          – opens GUI
+ * /bazaarutils
  * /bazaarutils help
- * /bazaarutils tax <1-25>           (percent)
- * /bazaarutils developer            (toggle)
+ * /bazaarutils tax &lt;1-25&gt;
+ * /bazaarutils developer
  *
- * /bazaarutils custom add  <amount> <slot>
- * /bazaarutils custom remove <index>
+ * /bazaarutils custom add    &lt;amount&gt; &lt;slot&gt;
+ * /bazaarutils custom remove &lt;index&gt;
  *
- * /bazaarutils rule   add    price|volume|name <value>
- * /bazaarutils rule   remove <index>
- * </pre>
+ * /bazaarutils rule add    price|volume|name &lt;value&gt;
+ * /bazaarutils rule remove &lt;index&gt;
  */
 public final class Commands {
 
@@ -38,186 +35,217 @@ public final class Commands {
 
     public static void register() {
         ClientCommandHandler.instance.registerCommand(new BUCommand());
-        // short alias
         ClientCommandHandler.instance.registerCommand(
-                new Alias("bu", "bazaarutils"));
+                new AliasCommand("bu", "bazaarutils"));
     }
 
     /* ------------------------------------------------------------------ */
-    /*  Main command implementation                                       */
+    /*  Main bazaarutils command                                          */
     /* ------------------------------------------------------------------ */
 
     private static final class BUCommand implements ICommand {
 
         @Override public String getCommandName() { return "bazaarutils"; }
-
-        @Override public String getCommandUsage(ICommandSender s) {
-            return "/bazaarutils [sub …]  –  /bazaarutils help";
-        }
-
+        @Override public String getCommandUsage(ICommandSender s) { return "/bazaarutils …"; }
         @Override public List<String> getCommandAliases() { return Collections.emptyList(); }
+        @Override public boolean canCommandSenderUseCommand(ICommandSender s) { return true; }
+        @Override public int compareTo(ICommand o) { return getCommandName().compareTo(o.getCommandName()); }
+        @Override public List<String> addTabCompletionOptions(ICommandSender s,String[]a,BlockPos p){return Collections.emptyList();}
 
-        @Override public void processCommand(ICommandSender sender, String[] args) {
+        /* -------------------------------------------------------------- */
 
-            /* ---------- no args → open GUI ---------- */
-            if (args.length == 0) {
-                BUConfig.openGUI();
-                return;
-            }
+        @Override
+        public void processCommand(ICommandSender sender, String[] a) {
 
-            String sub = args[0].toLowerCase();
+            /* no args → open GUI */
+            if (a.length == 0) { BUConfig.openGUI(); return; }
+
+            String sub = a[0].toLowerCase();
 
             switch (sub) {
-                case "help" -> Util.notifyAll(Util.HELPMESSAGE);
+                case "help":
+                    Util.notifyAll(Util.HELPMESSAGE);
+                    break;
 
-                case "tax"  -> handleTax(args);
-                case "developer" -> toggleDeveloper();
+                case "tax":
+                    handleTax(a);         // /bu tax <percent>
+                    break;
 
-                case "custom" -> handleCustom(args);
-                case "rule"   -> handleRule(args);
+                case "developer":
+                    toggleDeveloper();
+                    break;
 
-                default -> Util.notifyAll("Unknown sub-command.  /bazaarutils help");
+                case "custom":
+                    handleCustom(a);      // /bu custom …
+                    break;
+
+                case "rule":
+                    handleRule(a);        // /bu rule …
+                    break;
+
+                default:
+                    Util.notifyAll("Unknown sub-command, use /bazaarutils help");
             }
         }
 
-        /* ----- /bazaarutils tax <1-25> ----- */
+        /* -------------------------- tax -------------------------- */
+
         private static void handleTax(String[] a) {
-            if (a.length != 2) { Util.notifyAll("Usage: /bu tax 1-25"); return; }
+            if (a.length != 2) { Util.notifyAll("Usage: /bu tax <1-25>"); return; }
             try {
                 double p = Double.parseDouble(a[1]);
                 if (p < 1 || p > 25) throw new NumberFormatException();
-                BUConfig.get().bzTax = p / 100.0;
+                BUConfig.get().setBzTax(p / 100.0);
                 BUConfig.HANDLER.save();
                 Util.notifyAll("Bazaar tax set to " + p + "%");
             } catch (NumberFormatException e) {
-                Util.notifyAll("Invalid tax value.");
+                Util.notifyAll("Invalid number.");
             }
         }
 
-        /* ----- /bazaarutils developer ----- */
+        /* ---------------------- developer ----------------------- */
+
         private static void toggleDeveloper() {
-            BUConfig.get().developerMode = !BUConfig.get().developerMode;
+            boolean now = !BUConfig.get().isDeveloperMode();
+            BUConfig.get().setDeveloperMode(now);
             BUConfig.HANDLER.save();
-            Util.notifyAll("Developer mode " +
-                    (BUConfig.get().developerMode ? "enabled" : "disabled") +
-                    ". Restart required.");
+            Util.notifyAll("Developer mode " + (now ? "enabled" : "disabled") +
+                           " (restart required)");
         }
 
-        /* ----- /bazaarutils custom … ----- */
+        /* ------------------------- custom ----------------------- */
+
         private static void handleCustom(String[] a) {
-            if (a.length < 2) { Util.notifyAll("Usage: /bu custom …"); return; }
+            if (a.length < 2) { Util.notifyAll("Usage: /bu custom add|remove …"); return; }
 
-            switch (a[1]) {
-                case "add" -> {
-                    if (a.length != 4) { Util.notifyAll("Usage: /bu custom add <amount> <slot>"); return; }
-                    try {
-                        int amount = Integer.parseInt(a[2]);
-                        int slot   = Integer.parseInt(a[3]);
-                        if (amount < 1 || amount > 71679 || slot < 1 || slot > 36)
-                            throw new NumberFormatException();
-                        CustomOrder co = new CustomOrder(true, amount, slot - 1,
-                                                         CustomOrder.getNextColoredPane());
-                        BUConfig.get().customOrders.add(co);
-                        BUConfig.HANDLER.save();
-                        Util.notifyAll("Added custom-order: " + amount + " @ slot " + slot);
-                    } catch (NumberFormatException e) {
-                        Util.notifyAll("Invalid numbers.");
-                    }
-                }
-                case "remove" -> {
-                    if (a.length != 3) { Util.notifyAll("Usage: /bu custom remove <index>"); return; }
-                    int idx = Integer.parseInt(a[2]) - 1;
-                    if (idx < 0 || idx >= BUConfig.get().customOrders.size()) {
-                        Util.notifyAll("No such custom-order.");
-                        return;
-                    }
-                    CustomOrder rem = BUConfig.get().customOrders.remove(idx);
+            if ("add".equals(a[1])) {
+                if (a.length != 4) { Util.notifyAll("Usage: /bu custom add <amount> <slot>"); return; }
+                try {
+                    int amount = Integer.parseInt(a[2]);
+                    int slot   = Integer.parseInt(a[3]);
+                    if (amount < 1 || amount > 71679 || slot < 1 || slot > 36)
+                        throw new NumberFormatException();
+
+                    CustomOrder co = new CustomOrder(true, amount, slot - 1,
+                                                     CustomOrder.getNextColoredPane());
+                    BUConfig.get().getCustomOrders().add(co);
                     BUConfig.HANDLER.save();
-                    Util.notifyAll("Removed custom-order " + rem.getOrderAmount());
+                    Util.notifyAll("Added custom-order " + amount + " @ slot " + slot);
+                } catch (NumberFormatException e) {
+                    Util.notifyAll("Invalid numbers.");
                 }
-                default -> Util.notifyAll("Usage: /bu custom add|remove …");
+                return;
             }
+
+            if ("remove".equals(a[1])) {
+                if (a.length != 3) { Util.notifyAll("Usage: /bu custom remove <index>"); return; }
+                int idx = Integer.parseInt(a[2]) - 1;
+                List<CustomOrder> list = BUConfig.get().getCustomOrders();
+                if (idx < 0 || idx >= list.size()) {
+                    Util.notifyAll("No such custom-order.");
+                    return;
+                }
+                CustomOrder removed = list.remove(idx);
+                BUConfig.HANDLER.save();
+                Util.notifyAll("Removed custom-order " + removed.getOrderAmount());
+                return;
+            }
+
+            Util.notifyAll("Usage: /bu custom add|remove …");
         }
 
-        /* ----- /bazaarutils rule … ----- */
+        /* -------------------------- rule ------------------------ */
+
         private static void handleRule(String[] a) {
-            if (a.length < 3) { Util.notifyAll("Usage: /bu rule …"); return; }
+            if (a.length < 3) { Util.notifyAll("Usage: /bu rule add|remove …"); return; }
 
-            RestrictSell r = BUConfig.get().restrictSell;
+            RestrictSell rs = BUConfig.get().getRestrictSell();
 
-            switch (a[1]) {
-                case "add" -> {
-                    if (a.length < 4) { Util.notifyAll("Usage: /bu rule add price|volume|name <value>"); return; }
-                    switch (a[2]) {
-                        case "price", "volume" -> {
-                            try {
-                                double v = Double.parseDouble(a[3]);
-                                if ("price".equals(a[2]))
-                                    r.addRule(RestrictSell.restrictBy.PRICE , v);
-                                else
-                                    r.addRule(RestrictSell.restrictBy.VOLUME, v);
-                                BUConfig.HANDLER.save();
-                                Util.notifyAll("Added rule " + a[2].toUpperCase() + " " + v);
-                            } catch (NumberFormatException e) {
-                                Util.notifyAll("Number expected.");
-                            }
-                        }
-                        case "name"  -> {
-                            String name = String.join(" ", java.util.Arrays.copyOfRange(a, 3, a.length));
-                            r.addRule(RestrictSell.restrictBy.NAME, name);
+            /* -------- add -------- */
+            if ("add".equals(a[1])) {
+                if (a.length < 4) {
+                    Util.notifyAll("Usage: /bu rule add price|volume|name <value>");
+                    return;
+                }
+                switch (a[2].toLowerCase()) {
+                    case "price":
+                    case "volume":
+                        try {
+                            double v = Double.parseDouble(a[3]);
+                            if ("price".equals(a[2]))
+                                rs.addRule(RestrictSell.restrictBy.PRICE , v);
+                            else
+                                rs.addRule(RestrictSell.restrictBy.VOLUME, v);
                             BUConfig.HANDLER.save();
-                            Util.notifyAll("Added NAME rule: " + name);
+                            Util.notifyAll("Added rule " + a[2].toUpperCase() + " " + v);
+                        } catch (NumberFormatException e) {
+                            Util.notifyAll("Number expected.");
                         }
-                        default -> Util.notifyAll("Unknown rule type.");
-                    }
+                        break;
+
+                    case "name":
+                        String name = joinFrom(a, 3);
+                        rs.addRule(RestrictSell.restrictBy.NAME, name);
+                        BUConfig.HANDLER.save();
+                        Util.notifyAll("Added NAME rule: " + name);
+                        break;
+
+                    default:
+                        Util.notifyAll("Unknown rule type.");
                 }
-                case "remove" -> {
-                    if (a.length != 3) { Util.notifyAll("Usage: /bu rule remove <index>"); return; }
-                    int idx = Integer.parseInt(a[2]) - 1;
-                    List<RestrictSellControl> list = r.getControls();
-                    if (idx < 0 || idx >= list.size()) { Util.notifyAll("No such rule."); return; }
-                    RestrictSellControl c = list.remove(idx);
-                    BUConfig.HANDLER.save();
-                    Util.notifyAll("Removed rule " + c.getRule() +
-                                   (c.getRule() == RestrictSell.restrictBy.NAME
-                                        ? ": " + c.getName()
-                                        : ": " + c.getAmount()));
-                }
-                default -> Util.notifyAll("Usage: /bu rule add|remove …");
+                return;
             }
+
+            /* -------- remove -------- */
+            if ("remove".equals(a[1])) {
+                if (a.length != 3) { Util.notifyAll("Usage: /bu rule remove <index>"); return; }
+                int idx = Integer.parseInt(a[2]) - 1;
+                List<RestrictSellControl> list = rs.getControls();
+                if (idx < 0 || idx >= list.size()) { Util.notifyAll("No such rule."); return; }
+                RestrictSellControl c = list.remove(idx);
+                BUConfig.HANDLER.save();
+                Util.notifyAll("Removed rule " + c.getRule() +
+                               (c.getRule() == RestrictSell.restrictBy.NAME
+                                    ? ": " + c.getName()
+                                    : ": " + c.getAmount()));
+                return;
+            }
+
+            Util.notifyAll("Usage: /bu rule add|remove …");
         }
 
-        /* ------------------------------------------------------------------ */
-        /*  Standard ICommand boiler-plate                                    */
-        /* ------------------------------------------------------------------ */
-
-        @Override public boolean canCommandSenderUseCommand(ICommandSender s) { return true; }
-        @Override public List<String> addTabCompletionOptions(ICommandSender s, String[] a, BlockPos p) { return Collections.emptyList(); }
-        @Override public int compareTo(ICommand o) { return getCommandName().compareTo(o.getCommandName()); }
+        /* helper to join remaining args (for NAME rule) */
+        private static String joinFrom(String[] a, int idx) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = idx; i < a.length; i++) {
+                if (i > idx) sb.append(' ');
+                sb.append(a[i]);
+            }
+            return sb.toString();
+        }
     }
 
     /* ------------------------------------------------------------------ */
-    /*  Simple alias handler                                              */
+    /*  Simple alias ( /bu → /bazaarutils )                               */
     /* ------------------------------------------------------------------ */
 
-    private static final class Alias implements ICommand {
-        private final String name, redirect;
-        Alias(String n, String r) { name = n; redirect = r; }
+    private static final class AliasCommand implements ICommand {
+        private final String alias, target;
 
-        @Override public String getCommandName() { return name; }
-        @Override public String getCommandUsage(ICommandSender s) { return "/" + name; }
-        @Override public void processCommand(ICommandSender s, String[] a) {
-            // fake “/redirect …” by re-building the full command line
-            StringBuilder sb = new StringBuilder('/').append(redirect);
+        AliasCommand(String a, String t) { alias = a; target = t; }
+
+        @Override public String getCommandName()  { return alias; }
+        @Override public String getCommandUsage(ICommandSender s){return '/' + alias;}
+        @Override public List<String> getCommandAliases(){return Collections.emptyList();}
+        @Override public boolean canCommandSenderUseCommand(ICommandSender s){return true;}
+        @Override public int compareTo(ICommand o){return alias.compareTo(o.getCommandName());}
+        @Override public List<String> addTabCompletionOptions(ICommandSender s,String[]a,BlockPos p){return Collections.emptyList();}
+
+        @Override
+        public void processCommand(ICommandSender s, String[] a) {
+            StringBuilder sb = new StringBuilder('/').append(target);
             for (String arg : a) sb.append(' ').append(arg);
-            // send through the player so history & macros still work
             if (s instanceof EntityPlayer p) p.sendChatMessage(sb.toString());
         }
-
-        /* minimal boiler-plate */
-        @Override public boolean canCommandSenderUseCommand(ICommandSender s) { return true; }
-        @Override public List<String> addTabCompletionOptions(ICommandSender s,String[] a,BlockPos p){return Collections.emptyList();}
-        @Override public List<String> getCommandAliases(){return Collections.emptyList();}
-        @Override public int compareTo(ICommand o){return name.compareTo(o.getCommandName());}
     }
 }
