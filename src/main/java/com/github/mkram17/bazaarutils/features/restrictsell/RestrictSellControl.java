@@ -1,25 +1,49 @@
 package com.github.mkram17.bazaarutils.features.restrictsell;
 
-import lombok.Getter;
-import lombok.Setter;
+/**
+ * Immutable description of a single “restrict-sell” rule.
+ * <br>Designed for Forge 1.8.9 – no Lombok or external libs.
+ */
+public final class RestrictSellControl {
 
-public class RestrictSellControl {
-    @Getter
-    @Setter
-    private boolean enabled = true;
-    @Getter @Setter
-    private RestrictSell.restrictBy rule;
-    @Getter @Setter
-    private double amount;
-    @Getter @Setter
-    private String name;
+    /* ----------------------------------------------------------- */
+    /*  core data                                                  */
+    /* ----------------------------------------------------------- */
 
-    public RestrictSellControl(RestrictSell.restrictBy rule, double amount) {
-        this.rule = rule;
-        this.amount = amount;
+    private boolean           enabled = true;      // may be toggled in-game
+    private final RestrictSell.Rule rule;          // rule type (PRICE / VOLUME / NAME)
+
+    /*   numeric rules   */ private double amount; // upper limit (price / volume)
+    /*   name   rules    */ private String name;   // blocked item-name
+
+    /* ----------------------------------------------------------- */
+    /*  constructors                                               */
+    /* ----------------------------------------------------------- */
+
+    /** PRICE or VOLUME rule */
+    public RestrictSellControl(RestrictSell.Rule rule, double limit) {
+        this.rule   = rule;
+        this.amount = limit;
     }
-    public RestrictSellControl(RestrictSell.restrictBy rule, String name) {
+
+    /** NAME rule */
+    public RestrictSellControl(RestrictSell.Rule rule, String itemName) {
         this.rule = rule;
-        this.name = name;
+        this.name = itemName;
     }
+
+    /* ----------------------------------------------------------- */
+    /*  getters / setters                                          */
+    /* ----------------------------------------------------------- */
+
+    public boolean isEnabled()             { return enabled; }
+    public void    setEnabled(boolean b)   { enabled = b;    }
+
+    public RestrictSell.Rule getRule()     { return rule;    }
+
+    public double getAmount()              { return amount;  }
+    public void   setAmount(double v)      { amount = v;     }
+
+    public String getName()                { return name;    }
+    public void   setName(String n)        { name = n;       }
 }
