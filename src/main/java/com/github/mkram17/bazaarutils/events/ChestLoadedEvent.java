@@ -1,64 +1,81 @@
 package com.github.mkram17.bazaarutils.events;
 
-import lombok.Getter;
-import meteordevelopment.orbit.ICancellable;
-import net.minecraft.item.ItemStack;
-
 import java.util.ArrayList;
 import java.util.List;
 
+import net.minecraft.item.ItemStack;
+
 /**
- * Forge-1.8.9 version of ChestLoadedEvent.
+ * Fired when a chest / generic container GUI is fully populated.
  *
- * The original Fabric callback (ScreenEvents.AFTER_INIT, GenericContainerScreen, etc.)
- * does not exist on 1.8.9, so this class is now a simple data-carrier that other
- * parts of the mod can fill and post manually:
+ * <p><b>How to use on 1.8.9:</b><br>
+ * Forge does not have Fabric’s {@code ScreenEvents.AFTER_INIT}.  Build and
+ * post this event from the point where you finish constructing your GUI:</p>
  *
- *     ChestLoadedEvent ev = new ChestLoadedEvent();
- *     // ...populate fields…
- *     BazaarUtils.eventBus.post(ev);
+ * <pre>{@code
+ * ChestLoadedEvent ev = new ChestLoadedEvent();
+ * ev.setLowerChestInventory(inventory);
+ * ev.getItemStacks().addAll(collectedStacks);
+ * ev.setContainerName(guiTitle);
+ * BazaarUtils.eventBus.post(ev);
+ * }</pre>
  */
-public class ChestLoadedEvent implements ICancellable, BUListener {
+public class ChestLoadedEvent implements BUListener {
 
     /* ------------------------------------------------------------------
-       Event data
-       ------------------------------------------------------------------ */
-    @Getter
-    private Object lowerChestInventory;          // kept for API parity
+     *  Event data
+     * ------------------------------------------------------------------ */
 
-    @Getter
-    private List<ItemStack> itemStacks = new ArrayList<>();
+    /** Vanilla lower-inventory reference (kept as {@code Object} for parity) */
+    private Object lowerChestInventory;
 
-    @Getter
+    /** Immutable list reference – add stacks with {@link #getItemStacks()} */
+    private final List<ItemStack> itemStacks = new ArrayList<>();
+
+    /** The translated title of the open container */
     private String containerName = "";
 
     /* ------------------------------------------------------------------
-       BUListener
-       ------------------------------------------------------------------ */
-    @Override
-    public void subscribe() {
-        // No automatic GUI hook on 1.8.9 – post this event manually
-    }
+     *  Getters & setters
+     * ------------------------------------------------------------------ */
+
+    public Object getLowerChestInventory()      { return lowerChestInventory; }
+    public void   setLowerChestInventory(Object inv) { this.lowerChestInventory = inv; }
+
+    /** Direct access: {@code getItemStacks().add(stack);} */
+    public List<ItemStack> getItemStacks()      { return itemStacks; }
+
+    public String getContainerName()            { return containerName; }
+    public void   setContainerName(String name) { this.containerName = name; }
 
     /* ------------------------------------------------------------------
-       Helpers
-       ------------------------------------------------------------------ */
+     *  Convenience helpers
+     * ------------------------------------------------------------------ */
+
+    /** @return {@code true} when opened screen is the “Order options” menu. */
     public boolean inFlipMenu() {
         return containerName != null && containerName.contains("Order options");
     }
 
     /* ------------------------------------------------------------------
-       ICancellable implementation
-       ------------------------------------------------------------------ */
+     *  Cancel support (optional – Orbit–free)
+     * ------------------------------------------------------------------ */
+
     private boolean cancelled = false;
 
-    @Override
-    public void setCancelled(boolean b) {
-        this.cancelled = b;
-    }
+    /** Mark the event as cancelled inside your own handlers. */
+    public void setCancelled(boolean cancelled) { this.cancelled = cancelled; }
+
+    /** @return {@code true} if some handler cancelled this event. */
+    public boolean isCancelled()               { return cancelled; }
+
+    /* ------------------------------------------------------------------
+     *  BUListener implementation
+     * ------------------------------------------------------------------ */
 
     @Override
-    public boolean isCancelled() {
-        return cancelled;
+    public void subscribe() {
+        /* No automatic GUI hook on Forge-1.8.9.
+           Post this event manually at the proper time (see class javadoc). */
     }
 }
